@@ -14,6 +14,7 @@ consts:
   # --- Update these for your environment ---
   alert_analyzer_id: "alert-analyzer"    # Agent for CVE/vulnerability analysis
   osquery_generator_id: "osquery-generator"  # Agent for osquery SQL generation
+  report_writer_id: "report-writer"    # Agent for incident report generation
   connector_id: "Anthropic-Claude-Opus-4-5"             # Inference connector ID for AI agent steps
   agent_policy_id: "356a60cd-f2b4-48ca-b609-0ee44ccdec4a"          # Fleet agent policy covering monitored hosts
   reports_index: "siem-demo-reports"
@@ -200,7 +201,7 @@ steps:
       - name: generate_report
         type: ai.agent
         with:
-          agent_id: "{{ consts.alert_analyzer_id }}"
+          agent_id: "{{ consts.report_writer_id }}"
           message: |
             You are writing an incident report for a security team.
 

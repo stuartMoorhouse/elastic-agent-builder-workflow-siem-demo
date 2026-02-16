@@ -141,7 +141,11 @@ Alert data:
 }
 ```
 
-### Test 2: Write an incident report
+---
+
+## report-writer
+
+### Test 1: Write an incident report
 
 ```
 You are writing an incident report for a security team.
@@ -152,19 +156,20 @@ VULNERABILITY ANALYSIS:
 The alert indicates exploitation of CVE-2021-44228 (Log4Shell) in Apache Solr 8.11.0 running on JDK 8u181. A Java process (Solr) spawned a bash reverse shell connecting to 10.0.1.101:4444. The presence of log4j-core-2.14.1.jar confirms the host is vulnerable. Log4j-core versions 2.0 through 2.16.0 are affected.
 
 OSQUERY USED:
-SELECT f.path, f.filename, REGEX_MATCH(f.filename, 'log4j-core-(\d+\.\d+\.?\d*)', 1) AS log4j_version FROM file f WHERE (f.path LIKE '/opt/%/log4j-core-%.jar' OR f.path LIKE '/var/%/log4j-core-%.jar') AND REGEX_MATCH(f.filename, 'log4j-core-(\d+\.\d+\.?\d*)', 1) >= '2.0' AND REGEX_MATCH(f.filename, 'log4j-core-(\d+\.\d+\.?\d*)', 1) < '2.17.0';
+SELECT path, filename, directory FROM file WHERE (directory LIKE '/opt/%%' OR directory LIKE '/usr/%%' OR directory LIKE '/var/%%' OR directory LIKE '/home/%%' OR directory LIKE '/srv/%%' OR directory LIKE '/tmp/%%') AND filename LIKE 'log4j-core%'
 
 FLEET SCAN RESULTS (all monitored hosts):
-[
-  {"host": "siem-demo-solr-kb", "path": "/opt/solr-8.11.0/server/lib/ext/log4j-core-2.14.1.jar", "log4j_version": "2.14.1"},
-  {"host": "siem-demo-solr-support", "path": "/opt/solr-8.11.0/server/lib/ext/log4j-core-2.14.1.jar", "log4j_version": "2.14.1"}
+Columns: [{"name":"host.name","type":"keyword"},{"name":"osquery.path","type":"keyword"},{"name":"osquery.filename","type":"keyword"},{"name":"osquery.directory","type":"keyword"},{"name":"action_id","type":"keyword"},{"name":"@timestamp","type":"date"}]
+Values: [
+  ["siem-demo-solr-kb", "/opt/solr-8.11.0/licenses/log4j-core-2.14.1.jar.sha1", "log4j-core-2.14.1.jar.sha1", "/opt/solr-8.11.0/licenses/", "abc123", "2026-02-16T18:43:16.832Z"],
+  ["siem-demo-solr-support", "/opt/solr-8.11.0/licenses/log4j-core-2.14.1.jar.sha1", "log4j-core-2.14.1.jar.sha1", "/opt/solr-8.11.0/licenses/", "abc123", "2026-02-16T18:43:16.831Z"]
 ]
 
 Write a structured incident report with these sections:
 1. EXECUTIVE SUMMARY (2-3 sentences)
 2. ALERT DETAILS (host, rule, timestamp, process info)
 3. VULNERABILITY IDENTIFIED (CVE, affected software, versions)
-4. FLEET IMPACT (which hosts are vulnerable, which are patched)
+4. FLEET IMPACT (which hosts are vulnerable based on scan results)
 5. RECOMMENDED ACTIONS (prioritized list)
 6. OSQUERY USED (include the query for reproducibility)
 

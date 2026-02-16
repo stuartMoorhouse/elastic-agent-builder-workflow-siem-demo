@@ -39,6 +39,7 @@ WORKFLOWS_DIR="${TERRAFORM_DIR}/workflows"
 
 ALERT_ANALYZER_DEF="${WORKFLOWS_DIR}/agents/alert-analyzer.json"
 OSQUERY_GENERATOR_DEF="${WORKFLOWS_DIR}/agents/osquery-generator.json"
+REPORT_WRITER_DEF="${WORKFLOWS_DIR}/agents/report-writer.json"
 WORKFLOW_DEF="${WORKFLOWS_DIR}/defend-alert-triage.yaml"
 
 ################################################################################
@@ -80,7 +81,7 @@ print_info "Kibana is reachable."
 print_step "[1/6] Removing old workflows and agents..."
 
 WORKFLOW_NAME="Defend Alert Triage"
-AGENT_IDS=("alert-analyzer" "osquery-generator" "security-analyst")
+AGENT_IDS=("alert-analyzer" "osquery-generator" "report-writer" "security-analyst")
 
 # Delete existing workflow by known ID (GET to check, DELETE if found)
 # We can't list workflows, so try to delete by the name embedded in YAML
@@ -145,6 +146,7 @@ create_agent() {
 
 create_agent "$ALERT_ANALYZER_DEF"
 create_agent "$OSQUERY_GENERATOR_DEF"
+create_agent "$REPORT_WRITER_DEF"
 echo ""
 
 ################################################################################
@@ -295,6 +297,7 @@ echo "=========================================="
 echo ""
 print_info "Alert Analyzer agent: alert-analyzer"
 print_info "Osquery Generator:    osquery-generator"
+print_info "Report Writer:        report-writer"
 print_info "Inference connector:  ${CONNECTOR_ID}"
 print_info "Reports index:        ${REPORTS_INDEX}"
 print_info "Fleet policy:         ${POLICY_ID}"
