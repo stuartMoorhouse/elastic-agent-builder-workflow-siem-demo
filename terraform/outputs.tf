@@ -43,7 +43,7 @@ output "host_public_ips" {
   description = "Public IP addresses of the host VMs"
   value = {
     for i, instance in aws_instance.host :
-    "host-0${i + 1}" => instance.public_ip
+    local.host_configs[i].name => instance.public_ip
   }
 }
 
@@ -51,7 +51,7 @@ output "host_private_ips" {
   description = "Private IP addresses of the host VMs"
   value = {
     for i, instance in aws_instance.host :
-    "host-0${i + 1}" => instance.private_ip
+    local.host_configs[i].name => instance.private_ip
   }
 }
 
@@ -74,7 +74,7 @@ output "ssh_command_hosts" {
   description = "SSH commands for host VMs"
   value = {
     for i, instance in aws_instance.host :
-    "host-0${i + 1}" => "ssh -i ${local_file.ssh_private_key.filename} ubuntu@${instance.public_ip}"
+    local.host_configs[i].name => "ssh -i ${local_file.ssh_private_key.filename} ubuntu@${instance.public_ip}"
   }
 }
 

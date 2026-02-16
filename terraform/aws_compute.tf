@@ -31,9 +31,44 @@ resource "local_file" "ssh_private_key" {
   file_permission = "0600"
 }
 
-# Host VMs (3x vulnerable Tomcat servers)
+# Per-host configuration for the Log4Shell scenario
+# - solr-kb and solr-support: Solr 8.11.0 on old JDK 8u181 (VULNERABLE)
+# - solr-catalog: Solr 8.11.1 on JDK 8u352 (PATCHED)
+locals {
+  host_configs = [
+    {
+      name         = "solr-kb"
+      hostname     = "siem-demo-solr-kb"
+      role_label   = "Knowledge Base"
+      solr_version = "8.11.0"
+      jdk_url      = "https://cdn.azul.com/zulu/bin/zulu8.31.0.1-jdk8.0.181-linux_x64.tar.gz"
+      jdk_dir      = "zulu8.31.0.1-jdk8.0.181-linux_x64"
+      core_name    = "knowledge-base"
+    },
+    {
+      name         = "solr-support"
+      hostname     = "siem-demo-solr-support"
+      role_label   = "Support Portal"
+      solr_version = "8.11.0"
+      jdk_url      = "https://cdn.azul.com/zulu/bin/zulu8.31.0.1-jdk8.0.181-linux_x64.tar.gz"
+      jdk_dir      = "zulu8.31.0.1-jdk8.0.181-linux_x64"
+      core_name    = "support-portal"
+    },
+    {
+      name         = "solr-catalog"
+      hostname     = "siem-demo-solr-catalog"
+      role_label   = "Product Catalog"
+      solr_version = "8.11.1"
+      jdk_url      = "https://cdn.azul.com/zulu/bin/zulu8.66.0.15-jdk8.0.352-linux_x64.tar.gz"
+      jdk_dir      = "zulu8.66.0.15-jdk8.0.352-linux_x64"
+      core_name    = "product-catalog"
+    },
+  ]
+}
+
+# Host VMs (Apache Solr instances — 2 vulnerable + 1 patched)
 resource "aws_instance" "host" {
-  count = 3
+  count = length(local.host_configs)
 
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.aws_instance_type_host
@@ -54,123 +89,101 @@ resource "aws_instance" "host" {
               exec > >(tee -a /var/log/siem-demo-setup.log)
               exec 2>&1
 
+              HOST_NAME="${local.host_configs[count.index].hostname}"
+              ROLE_LABEL="${local.host_configs[count.index].role_label}"
+              SOLR_VERSION="${local.host_configs[count.index].solr_version}"
+              JDK_URL="${local.host_configs[count.index].jdk_url}"
+              JDK_DIR="${local.host_configs[count.index].jdk_dir}"
+              CORE_NAME="${local.host_configs[count.index].core_name}"
+
               echo "=========================================="
               echo "SIEM Demo - Host VM Setup"
-              echo "Vulnerable Tomcat Server Installation"
+              echo "Apache Solr $${SOLR_VERSION} ($${ROLE_LABEL})"
               echo "Starting: $(date)"
               echo "=========================================="
 
               # Set hostname
               echo "[1/8] Setting hostname..."
-              hostnamectl set-hostname siem-demo-host-0${count.index + 1}
+              hostnamectl set-hostname "$${HOST_NAME}"
 
               # Update system
               echo "[2/8] Updating system packages..."
               export DEBIAN_FRONTEND=noninteractive
               apt-get update -qq
               apt-get upgrade -y -qq
+              apt-get install -y -qq wget curl net-tools lsof
 
-              # Install Java 11
-              echo "[3/8] Installing Java 11..."
-              apt-get install -y -qq openjdk-11-jdk wget curl net-tools
+              # Install specific JDK version
+              echo "[3/8] Installing JDK from $${JDK_URL}..."
+              cd /tmp
+              wget -q "$${JDK_URL}" -O jdk.tar.gz
+              mkdir -p /opt/java
+              tar xzf jdk.tar.gz -C /opt/java
+              JAVA_HOME="/opt/java/$${JDK_DIR}"
 
-              # Create tomcat user
-              echo "[4/8] Creating tomcat user..."
-              if ! id "tomcat" &>/dev/null; then
-                useradd -r -m -U -d /opt/tomcat -s /bin/false tomcat
+              # Set JAVA_HOME system-wide
+              cat > /etc/profile.d/java.sh << 'JAVAENV'
+              export JAVA_HOME=/opt/java/JDKDIR
+              export PATH=$JAVA_HOME/bin:$PATH
+              JAVAENV
+              sed -i "s|JDKDIR|$${JDK_DIR}|g" /etc/profile.d/java.sh
+              source /etc/profile.d/java.sh
+
+              # Verify Java
+              "$${JAVA_HOME}/bin/java" -version 2>&1
+
+              # Create solr user
+              echo "[4/8] Creating solr user..."
+              if ! id "solr" &>/dev/null; then
+                useradd -r -m -U -d /opt/solr-home -s /bin/bash solr
               fi
 
-              # Configure passwordless sudo for tomcat (INTENTIONALLY INSECURE - for demo)
-              echo "tomcat ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/tomcat
-              chmod 440 /etc/sudoers.d/tomcat
+              # Configure passwordless sudo for solr (INTENTIONALLY INSECURE - for demo)
+              echo "solr ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/solr
+              chmod 440 /etc/sudoers.d/solr
 
-              # Download and install Tomcat 9.0.30 (VULNERABLE VERSION)
-              echo "[5/8] Downloading Tomcat 9.0.30..."
-              TOMCAT_VERSION="9.0.30"
-              TOMCAT_ARCHIVE="apache-tomcat-$${TOMCAT_VERSION}.tar.gz"
-              TOMCAT_URL="https://archive.apache.org/dist/tomcat/tomcat-9/v$${TOMCAT_VERSION}/bin/$${TOMCAT_ARCHIVE}"
+              # Download and install Solr
+              echo "[5/8] Downloading Apache Solr $${SOLR_VERSION}..."
+              SOLR_ARCHIVE="solr-$${SOLR_VERSION}.tgz"
+              SOLR_URL="https://archive.apache.org/dist/lucene/solr/$${SOLR_VERSION}/$${SOLR_ARCHIVE}"
 
               cd /tmp
-              wget -q "$${TOMCAT_URL}"
+              wget -q "$${SOLR_URL}"
 
-              # Extract and install
-              echo "[6/8] Installing Tomcat..."
-              mkdir -p /opt/tomcat
-              tar xzf "$${TOMCAT_ARCHIVE}" -C /opt/tomcat --strip-components=1
-              chown -R tomcat:tomcat /opt/tomcat/
-              chmod -R u+x /opt/tomcat/bin/
+              # Extract and install using Solr's install script
+              echo "[6/8] Installing Solr..."
+              tar xzf "$${SOLR_ARCHIVE}" "solr-$${SOLR_VERSION}/bin/install_solr_service.sh" --strip-components=2
+              bash ./install_solr_service.sh "$${SOLR_ARCHIVE}" \
+                -i /opt \
+                -d /var/solr \
+                -u solr \
+                -s solr \
+                -p 8983 \
+                -n
 
-              # Configure WEAK credentials (INTENTIONALLY INSECURE)
-              echo "[7/8] Configuring weak credentials (tomcat/tomcat)..."
-              cat > /opt/tomcat/conf/tomcat-users.xml << 'TOMCATUSERS'
-              <?xml version="1.0" encoding="UTF-8"?>
-              <tomcat-users xmlns="http://tomcat.apache.org/xml"
-                            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-                            xsi:schemaLocation="http://tomcat.apache.org/xml tomcat-users.xsd"
-                            version="1.0">
-                <role rolename="manager-gui"/>
-                <role rolename="manager-script"/>
-                <role rolename="manager-jmx"/>
-                <role rolename="manager-status"/>
-                <role rolename="admin-gui"/>
-                <role rolename="admin-script"/>
-                <user username="tomcat" password="tomcat" roles="manager-gui,manager-script,manager-jmx,manager-status,admin-gui,admin-script"/>
-              </tomcat-users>
-              TOMCATUSERS
+              # Configure JAVA_HOME for Solr
+              echo "[7/8] Configuring Solr environment..."
+              cat >> /etc/default/solr.in.sh << SOLRENV
+              SOLR_JAVA_HOME="$${JAVA_HOME}"
+              SOLR_HOST="0.0.0.0"
+              SOLRENV
 
-              # Remove remote access restrictions (INTENTIONALLY INSECURE)
-              cat > /opt/tomcat/webapps/manager/META-INF/context.xml << 'MANAGERCTX'
-              <?xml version="1.0" encoding="UTF-8"?>
-              <Context antiResourceLocking="false" privileged="true" >
-                <Manager sessionAttributeValueClassNameFilter="java\.lang\.(?:Boolean|Integer|Long|Number|String)|org\.apache\.catalina\.filters\.CsrfPreventionFilter\$LruCache(?:\$1)?|java\.util\.(?:Linked)?HashMap"/>
-              </Context>
-              MANAGERCTX
+              # Start Solr
+              systemctl enable solr
+              systemctl start solr
 
-              if [ -f /opt/tomcat/webapps/host-manager/META-INF/context.xml ]; then
-                cat > /opt/tomcat/webapps/host-manager/META-INF/context.xml << 'HOSTCTX'
-              <?xml version="1.0" encoding="UTF-8"?>
-              <Context antiResourceLocking="false" privileged="true" >
-                <Manager sessionAttributeValueClassNameFilter="java\.lang\.(?:Boolean|Integer|Long|Number|String)|org\.apache\.catalina\.filters\.CsrfPreventionFilter\$LruCache(?:\$1)?|java\.util\.(?:Linked)?HashMap"/>
-              </Context>
-              HOSTCTX
-              fi
+              # Wait for Solr to start
+              echo "[8/8] Waiting for Solr to start..."
+              for i in $(seq 1 30); do
+                if curl -s "http://localhost:8983/solr/" > /dev/null 2>&1; then
+                  echo "Solr is up after $${i} seconds"
+                  break
+                fi
+                sleep 2
+              done
 
-              # Create systemd service
-              echo "[8/8] Creating systemd service..."
-              cat > /etc/systemd/system/tomcat.service << 'TOMCATSVC'
-              [Unit]
-              Description=Apache Tomcat Web Application Container
-              After=network.target
-
-              [Service]
-              Type=forking
-              User=tomcat
-              Group=tomcat
-
-              Environment="JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64"
-              Environment="JAVA_OPTS=-Djava.security.egd=file:///dev/urandom -Djava.awt.headless=true"
-              Environment="CATALINA_BASE=/opt/tomcat"
-              Environment="CATALINA_HOME=/opt/tomcat"
-              Environment="CATALINA_PID=/opt/tomcat/temp/tomcat.pid"
-              Environment="CATALINA_OPTS=-Xms512M -Xmx1024M -server -XX:+UseParallelGC"
-
-              ExecStart=/opt/tomcat/bin/startup.sh
-              ExecStop=/opt/tomcat/bin/shutdown.sh
-
-              RestartSec=10
-              Restart=always
-
-              [Install]
-              WantedBy=multi-user.target
-              TOMCATSVC
-
-              # Start Tomcat
-              systemctl daemon-reload
-              systemctl enable tomcat
-              systemctl start tomcat
-
-              # Wait for Tomcat to start
-              sleep 10
+              # Create a Solr core for the scenario
+              su - solr -c "/opt/solr/bin/solr create_core -c $${CORE_NAME} -d _default" || echo "Core creation may need retry"
 
               # Get IP address
               PRIVATE_IP=$(hostname -I | awk '{print $1}')
@@ -178,42 +191,36 @@ resource "aws_instance" "host" {
               # Verification
               echo ""
               echo "Verification:"
-              if systemctl is-active --quiet tomcat; then
-                echo "Tomcat is running"
+              if systemctl is-active --quiet solr; then
+                echo "Solr is running"
               else
-                echo "Tomcat failed to start"
+                echo "Solr failed to start"
               fi
 
-              if curl -s http://localhost:8080 > /dev/null 2>&1; then
-                echo "Tomcat responds on port 8080"
-              else
-                echo "Tomcat is not responding"
-              fi
+              SOLR_VER=$(curl -s "http://localhost:8983/solr/admin/info/system" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['lucene']['solr-spec-version'])" 2>/dev/null || echo "unknown")
+              JAVA_VER=$("$${JAVA_HOME}/bin/java" -version 2>&1 | head -1)
 
-              HTTP_CODE=$(curl -s -o /dev/null -w "%%{http_code}" -u tomcat:tomcat http://localhost:8080/manager/text/list 2>/dev/null || echo "000")
-              if [ "$${HTTP_CODE}" = "200" ]; then
-                echo "Manager application accessible"
-              else
-                echo "Manager returned HTTP $${HTTP_CODE}"
-              fi
+              echo "Solr version: $${SOLR_VER}"
+              echo "Java version: $${JAVA_VER}"
+              echo "Core: $${CORE_NAME}"
 
               echo ""
               echo "=========================================="
               echo "Host VM Setup Complete!"
               echo "Hostname: $(hostname)"
-              echo "Tomcat Manager: http://$${PRIVATE_IP}:8080/manager/html"
-              echo "Credentials: tomcat/tomcat"
+              echo "Role: $${ROLE_LABEL} ($${CORE_NAME})"
+              echo "Solr Admin: http://$${PRIVATE_IP}:8983/solr/"
               echo "Completed: $(date)"
               echo "=========================================="
               EOF
 
   tags = {
-    Name = "siem-demo-host-0${count.index + 1}"
-    Role = "host"
+    Name = local.host_configs[count.index].hostname
+    Role = local.host_configs[count.index].name
   }
 }
 
-# Red Team VM (Metasploit + attack tools)
+# Red Team VM (Metasploit + nmap + nuclei)
 resource "aws_instance" "redteam" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.aws_instance_type_redteam
@@ -253,7 +260,7 @@ resource "aws_instance" "redteam" {
               echo "[3/7] Installing dependencies..."
               apt-get install -y -qq curl wget git build-essential libssl-dev \
                 libreadline-dev zlib1g-dev nmap netcat-traditional postgresql \
-                postgresql-contrib python3 python3-pip
+                postgresql-contrib python3 python3-pip unzip jq
 
               # Install Metasploit Framework
               echo "[4/7] Installing Metasploit Framework..."
@@ -266,9 +273,18 @@ resource "aws_instance" "redteam" {
               echo "[5/7] Initializing Metasploit database..."
               su - ubuntu -c "msfdb init" || echo "Note: Database initialization skipped (run 'msfdb init' manually after login)"
 
-              # Install additional tools (nikto = directory/web scanner, john = password cracking)
-              echo "[6/7] Installing additional tools..."
-              apt-get install -y -qq john nikto dirb
+              # Install nuclei (for Log4Shell vulnerability scanning)
+              echo "[6/7] Installing nuclei..."
+              NUCLEI_VERSION=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest | jq -r '.tag_name' | tr -d 'v')
+              if [ -n "$${NUCLEI_VERSION}" ] && [ "$${NUCLEI_VERSION}" != "null" ]; then
+                wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v$${NUCLEI_VERSION}/nuclei_$${NUCLEI_VERSION}_linux_amd64.zip" -O /tmp/nuclei.zip
+                unzip -o /tmp/nuclei.zip -d /usr/local/bin/
+                chmod +x /usr/local/bin/nuclei
+                # Download nuclei templates as ubuntu user
+                su - ubuntu -c "nuclei -update-templates 2>/dev/null" || echo "Note: nuclei templates will download on first run"
+              else
+                echo "WARNING: Could not determine nuclei version, skipping install"
+              fi
 
               # Create scripts directory for attack automation
               echo "[7/7] Creating scripts directory..."
@@ -280,7 +296,7 @@ resource "aws_instance" "redteam" {
               echo "Verification:"
               msfconsole --version || echo "Metasploit not available yet"
               nmap --version | head -1
-              nikto -Version 2>/dev/null || echo "Nikto installed"
+              nuclei --version 2>/dev/null || echo "nuclei not available yet"
 
               echo ""
               echo "=========================================="
@@ -300,7 +316,7 @@ resource "null_resource" "redteam_scripts" {
   depends_on = [aws_instance.redteam]
 
   triggers = {
-    script_hash = filemd5("${path.module}/../scripts/run-metasploit.sh")
+    script_hash = filemd5("${path.module}/../scripts/host-scan.sh")
   }
 
   # Wait for cloud-init to complete
@@ -322,8 +338,8 @@ resource "null_resource" "redteam_scripts" {
 
   # Copy the attack script
   provisioner "file" {
-    source      = "${path.module}/../scripts/run-metasploit.sh"
-    destination = "/home/ubuntu/scripts/run-metasploit.sh"
+    source      = "${path.module}/../scripts/host-scan.sh"
+    destination = "/home/ubuntu/scripts/host-scan.sh"
 
     connection {
       type        = "ssh"
@@ -336,8 +352,8 @@ resource "null_resource" "redteam_scripts" {
   # Make script executable
   provisioner "remote-exec" {
     inline = [
-      "chmod +x /home/ubuntu/scripts/run-metasploit.sh",
-      "echo 'Attack script installed: /home/ubuntu/scripts/run-metasploit.sh'",
+      "chmod +x /home/ubuntu/scripts/host-scan.sh",
+      "echo 'Attack script installed: /home/ubuntu/scripts/host-scan.sh'",
     ]
 
     connection {

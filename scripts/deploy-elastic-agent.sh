@@ -52,10 +52,8 @@ KIBANA_URL=$(terraform output -raw kibana_endpoint)
 ELASTIC_USER=$(terraform output -raw elasticsearch_username)
 ELASTIC_PASSWORD=$(terraform output -raw elasticsearch_password)
 ELASTICSEARCH_URL=$(terraform output -raw elasticsearch_endpoint)
-FLEET_URL=$(terraform output -raw integrations_server_endpoint)
 ELASTIC_VERSION=$(terraform output -raw deployment_version)
 DEPLOYMENT_ID=$(terraform output -raw deployment_id)
-DEPLOYMENT_NAME="workflow-demo"
 SSH_KEY="${PROJECT_DIR}/state/ssh-key.pem"
 SSH_USER="ubuntu"
 POLICY_NAME="SIEM Demo - Endpoint Security"
@@ -68,14 +66,26 @@ HOST_COUNT=$(echo "$HOST_PUBLIC_IPS_JSON" | jq 'length')
 
 cd "$PROJECT_DIR"
 
+# Get Fleet Server URL from Kibana API (not from terraform - the integrations_server
+# endpoint is the APM server, not Fleet Server)
+print_info "Fetching Fleet Server URL from Kibana..."
+FLEET_URL=$(curl -s --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+  --header "kbn-xsrf: true" \
+  "${KIBANA_URL}/api/fleet/fleet_server_hosts" \
+  | jq -r '.items[] | select(.is_default==true) | .host_urls[0]')
+
+if [ -z "$FLEET_URL" ] || [ "$FLEET_URL" = "null" ]; then
+    print_error "Could not determine Fleet Server URL from Kibana"
+    exit 1
+fi
+
 print_info "Configuration:"
 echo "  Kibana URL:      $KIBANA_URL"
 echo "  Fleet URL:       $FLEET_URL"
 echo "  Elastic Version: $ELASTIC_VERSION"
 echo "  SSH Key:         $SSH_KEY"
 echo "  Hosts to deploy: $HOST_COUNT"
-for i in $(seq 1 "$HOST_COUNT"); do
-    HOST_KEY="host-0${i}"
+for HOST_KEY in $(echo "$HOST_PUBLIC_IPS_JSON" | jq -r 'keys[]'); do
     PUB_IP=$(echo "$HOST_PUBLIC_IPS_JSON" | jq -r ".[\"${HOST_KEY}\"]")
     PRIV_IP=$(echo "$HOST_PRIVATE_IPS_JSON" | jq -r ".[\"${HOST_KEY}\"]")
     echo "    ${HOST_KEY}: ${PUB_IP} (private: ${PRIV_IP})"
@@ -387,8 +397,7 @@ echo ""
 
 SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
 
-for i in $(seq 1 "$HOST_COUNT"); do
-    HOST_KEY="host-0${i}"
+for HOST_KEY in $(echo "$HOST_PUBLIC_IPS_JSON" | jq -r 'keys[]'); do
     HOST_IP=$(echo "$HOST_PUBLIC_IPS_JSON" | jq -r ".[\"${HOST_KEY}\"]")
 
     echo "  ----------------------------------------"
