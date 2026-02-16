@@ -5,7 +5,7 @@ description: >
   agent to identify the likely vulnerability, generates an osquery to check
   for that vulnerability across the fleet, validates the query on the source
   host first, then runs it fleet-wide, produces a report, and indexes it to
-  the reports index. Also supports manual execution with JSON alert input.
+  the reports index. Supports manual execution with JSON alert input.
 
 triggers:
   - type: alert
@@ -17,7 +17,6 @@ consts:
   connector_id: "Anthropic-Claude-Opus-4-5"             # Inference connector ID for AI agent steps
   agent_policy_id: "356a60cd-f2b4-48ca-b609-0ee44ccdec4a"          # Fleet agent policy covering monitored hosts
   reports_index: "siem-demo-reports"
-  # slack_webhook: "https://hooks.slack.com/services/REPLACE_ME"  # Optional: uncomment to enable Slack notifications
 
 # ==========================================================================
 # STEP 1: Log the incoming alert
@@ -185,13 +184,14 @@ steps:
           query: >
             FROM logs-osquery_manager.result-default
             | WHERE action_id == "{{ steps.run_fleet_query.output.data.queries[0].action_id }}"
-            | KEEP host.name, osquery.*, action_id, @timestamp
+            | KEEP host.name, osquery.path, osquery.filename, osquery.directory, action_id, @timestamp
 
       - name: log_fleet_results
         type: console
         with:
           message: >
             Fleet query returned {{ steps.fetch_fleet_results.output.values | size | default: 0 }} result(s).
+            Columns: {{ steps.fetch_fleet_results.output.columns | json }}
             Results: {{ steps.fetch_fleet_results.output.values | json }}
 
       # ======================================================================
@@ -214,13 +214,14 @@ steps:
             {{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}
 
             FLEET SCAN RESULTS (all monitored hosts):
-            {{ steps.fetch_fleet_results.output.values | json }}
+            Columns: {{ steps.fetch_fleet_results.output.columns | json }}
+            Values: {{ steps.fetch_fleet_results.output.values | json }}
 
             Write a structured incident report with these sections:
             1. EXECUTIVE SUMMARY (2-3 sentences)
             2. ALERT DETAILS (host, rule, timestamp, process info)
             3. VULNERABILITY IDENTIFIED (CVE, affected software, versions)
-            4. FLEET IMPACT (which hosts are vulnerable, which are patched)
+            4. FLEET IMPACT (which hosts are vulnerable based on scan results)
             5. RECOMMENDED ACTIONS (prioritized list)
             6. OSQUERY USED (include the query for reproducibility)
 
@@ -230,7 +231,9 @@ steps:
       - name: log_report
         type: console
         with:
-          message: "Report generated. Indexing and notifying."
+          message: >
+            Report generated:
+            {{ steps.generate_report.output }}
 
       # ======================================================================
       # STEP 8: Index the report to Elasticsearch
@@ -247,10 +250,11 @@ steps:
             alert_rule: "{{ event.alerts[0]['kibana.alert.rule.name'] | default: inputs.alerts[0]['kibana.alert.rule.name'] }}"
             source_host: "{{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}"
             source_agent_id: "{{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}"
-            vulnerability_analysis: "{{ steps.analyze_alert.output }}"
+            vulnerability_analysis: "{{ steps.analyze_alert.output | strip }}"
             osquery_sql: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
             fleet_results: ${{ steps.fetch_fleet_results.output.values }}
-            report: "{{ steps.generate_report.output }}"
+            fleet_columns: ${{ steps.fetch_fleet_results.output.columns }}
+            report: "{{ steps.generate_report.output | strip }}"
             execution_id: "{{ execution.id }}"
 
       - name: log_indexed

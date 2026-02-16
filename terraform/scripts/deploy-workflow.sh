@@ -179,6 +179,7 @@ else
                     "vulnerability_analysis": { "type": "text" },
                     "osquery_sql": { "type": "text" },
                     "fleet_results": { "type": "object", "enabled": false },
+                    "fleet_columns": { "type": "object", "enabled": false },
                     "report": { "type": "text" },
                     "execution_id": { "type": "keyword" }
                 }
