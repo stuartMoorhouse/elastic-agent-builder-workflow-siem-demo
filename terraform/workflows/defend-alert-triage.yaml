@@ -1,0 +1,271 @@
+name: Defend Alert Triage
+enabled: true
+description: >
+  Triggered by any Elastic Defend alert. Sends the alert to an Agent Builder
+  agent to identify the likely vulnerability, generates an osquery to check
+  for that vulnerability across the fleet, validates the query on the source
+  host first, then runs it fleet-wide, produces a report, and indexes it to
+  the reports index. Also supports manual execution with JSON alert input.
+
+triggers:
+  - type: alert
+
+consts:
+  # --- Update these for your environment ---
+  alert_analyzer_id: "alert-analyzer"    # Agent for CVE/vulnerability analysis
+  osquery_generator_id: "osquery-generator"  # Agent for osquery SQL generation
+  connector_id: "Anthropic-Claude-Opus-4-5"             # Inference connector ID for AI agent steps
+  agent_policy_id: "356a60cd-f2b4-48ca-b609-0ee44ccdec4a"          # Fleet agent policy covering monitored hosts
+  reports_index: "siem-demo-reports"
+  # slack_webhook: "https://hooks.slack.com/services/REPLACE_ME"  # Optional: uncomment to enable Slack notifications
+
+# ==========================================================================
+# STEP 1: Log the incoming alert
+# Alert data comes from event.alerts[] (alert trigger) or inputs.alerts[]
+# (manual run). The default filter handles both cases.
+# ==========================================================================
+steps:
+  - name: log_alert
+    type: console
+    with:
+      message: >
+        Defend alert received.
+        Rule: {{ event.alerts[0]['kibana.alert.rule.name'] | default: inputs.alerts[0]['kibana.alert.rule.name'] }}
+        Host: {{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}
+        Agent: {{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}
+
+  # ==========================================================================
+  # STEP 2: Agent Builder — Analyze the alert and identify the vulnerability
+  # ==========================================================================
+  - name: analyze_alert
+    type: ai.agent
+    with:
+      agent_id: "{{ consts.alert_analyzer_id }}"
+      message: |
+        An endpoint detection alert fired on a host in our environment.
+        Analyze the alert data below and determine:
+
+        1. What vulnerability was most likely exploited?
+        2. What CVE is it associated with?
+        3. What software component is affected?
+        4. What versions are vulnerable?
+        5. What would you look for on disk to confirm a host is vulnerable?
+
+        Provide a concise analysis (3-5 sentences), then state the CVE ID
+        and affected software clearly.
+
+        Alert data:
+        {{ inputs.alerts[0] | default: event.alerts[0] | json }}
+    timeout: 5m
+
+  - name: log_analysis
+    type: console
+    with:
+      message: >
+        AI analysis complete:
+        {{ steps.analyze_alert.output }}
+
+  # ==========================================================================
+  # STEP 3: Agent Builder — Generate an osquery to detect the vulnerability
+  # ==========================================================================
+  - name: generate_osquery
+    type: ai.agent
+    with:
+      agent_id: "{{ consts.osquery_generator_id }}"
+      message: |
+        Based on this vulnerability analysis, write an osquery SQL query
+        that can detect whether a Linux host is vulnerable.
+
+        Analysis:
+        {{ steps.analyze_alert.output }}
+
+        Requirements:
+        - The query must use only standard osquery tables (file, hash,
+          process_open_sockets, processes, etc.)
+        - It should scan common application directories for vulnerable
+          files (JARs, libraries, binaries)
+        - Return the file path, filename, and any version info
+
+        IMPORTANT: Return ONLY the raw SQL query. No markdown code fences,
+        no explanation, no commentary. Just the SELECT statement.
+    timeout: 3m
+
+  - name: log_query
+    type: console
+    with:
+      message: "Generated osquery: {{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
+
+  # ==========================================================================
+  # STEP 4: Test the osquery on the source host only
+  # ==========================================================================
+  - name: test_osquery
+    type: kibana.request
+    with:
+      method: POST
+      path: /api/osquery/live_queries
+      body:
+        query: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
+        agent_ids:
+          - "{{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}"
+        timeout: 120
+
+  - name: log_test_started
+    type: console
+    with:
+      message: >
+        Osquery test submitted (action {{ steps.test_osquery.output.data.queries[0].action_id }}).
+        Running on source host {{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }} only.
+
+  # Wait for the test query to complete
+  - name: wait_for_test
+    type: wait
+    with:
+      duration: 30s
+
+  # Fetch test result count from ES index
+  - name: fetch_test_count
+    type: elasticsearch.esql.query
+    with:
+      format: json
+      query: >
+        FROM logs-osquery_manager.result-default
+        | WHERE action_id == "{{ steps.test_osquery.output.data.queries[0].action_id }}"
+        | STATS result_count = COUNT(*)
+
+  - name: log_test_results
+    type: console
+    with:
+      message: "Test query rows returned: {{ steps.fetch_test_count.output.values[0][0] }}."
+
+  # ==========================================================================
+  # STEP 5: Validate test results before proceeding
+  # ==========================================================================
+  - name: check_test
+    type: if
+    condition: "${{ steps.fetch_test_count.output.values[0][0] > 0 }}"
+    steps:
+      # Test passed — run fleet-wide
+      - name: log_test_passed
+        type: console
+        with:
+          message: "Test query succeeded on source host. Running fleet-wide."
+
+      # ======================================================================
+      # STEP 6: Run the osquery across the full fleet
+      # ======================================================================
+      - name: run_fleet_query
+        type: kibana.request
+        with:
+          method: POST
+          path: /api/osquery/live_queries
+          body:
+            query: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
+            agent_policy_ids:
+              - "{{ consts.agent_policy_id }}"
+            timeout: 300
+
+      - name: log_fleet_started
+        type: console
+        with:
+          message: >
+            Fleet-wide osquery submitted (action {{ steps.run_fleet_query.output.data.queries[0].action_id }}).
+            Waiting for results...
+
+      # Wait for fleet results
+      - name: wait_for_fleet
+        type: wait
+        with:
+          duration: 60s
+
+      # Fetch fleet results from ES index
+      - name: fetch_fleet_results
+        type: elasticsearch.esql.query
+        with:
+          format: json
+          query: >
+            FROM logs-osquery_manager.result-default
+            | WHERE action_id == "{{ steps.run_fleet_query.output.data.queries[0].action_id }}"
+            | KEEP host.name, osquery.*, action_id, @timestamp
+
+      - name: log_fleet_results
+        type: console
+        with:
+          message: >
+            Fleet query returned {{ steps.fetch_fleet_results.output.values | size | default: 0 }} result(s).
+            Results: {{ steps.fetch_fleet_results.output.values | json }}
+
+      # ======================================================================
+      # STEP 7: Agent Builder — Produce the final report
+      # ======================================================================
+      - name: generate_report
+        type: ai.agent
+        with:
+          agent_id: "{{ consts.alert_analyzer_id }}"
+          message: |
+            You are writing an incident report for a security team.
+
+            An Elastic Defend alert fired on host
+            "{{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}". Here is the context:
+
+            VULNERABILITY ANALYSIS:
+            {{ steps.analyze_alert.output }}
+
+            OSQUERY USED:
+            {{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}
+
+            FLEET SCAN RESULTS (all monitored hosts):
+            {{ steps.fetch_fleet_results.output.values | json }}
+
+            Write a structured incident report with these sections:
+            1. EXECUTIVE SUMMARY (2-3 sentences)
+            2. ALERT DETAILS (host, rule, timestamp, process info)
+            3. VULNERABILITY IDENTIFIED (CVE, affected software, versions)
+            4. FLEET IMPACT (which hosts are vulnerable, which are patched)
+            5. RECOMMENDED ACTIONS (prioritized list)
+            6. OSQUERY USED (include the query for reproducibility)
+
+            Use plain text, no markdown. Be concise and actionable.
+        timeout: 5m
+
+      - name: log_report
+        type: console
+        with:
+          message: "Report generated. Indexing and notifying."
+
+      # ======================================================================
+      # STEP 8: Index the report to Elasticsearch
+      # ======================================================================
+      - name: index_report
+        type: elasticsearch.request
+        with:
+          method: POST
+          path: "/{{ consts.reports_index }}/_doc"
+          body:
+            "@timestamp": "{{ 'now' | date: '%Y-%m-%dT%H:%M:%SZ' }}"
+            report_type: "defend_alert_triage"
+            alert_id: "{{ event.alerts[0]._id | default: inputs.alerts[0]._id }}"
+            alert_rule: "{{ event.alerts[0]['kibana.alert.rule.name'] | default: inputs.alerts[0]['kibana.alert.rule.name'] }}"
+            source_host: "{{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}"
+            source_agent_id: "{{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}"
+            vulnerability_analysis: "{{ steps.analyze_alert.output }}"
+            osquery_sql: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
+            fleet_results: ${{ steps.fetch_fleet_results.output.values }}
+            report: "{{ steps.generate_report.output }}"
+            execution_id: "{{ execution.id }}"
+
+      - name: log_indexed
+        type: console
+        with:
+          message: >
+            Report indexed to {{ consts.reports_index }}.
+            Doc ID: {{ steps.index_report.output._id }}
+
+    else:
+      - name: log_test_failed
+        type: console
+        with:
+          message: >
+            Osquery test returned 0 results on source host
+            {{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}. Aborting fleet-wide scan.
+            Review the generated query manually:
+            {{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}

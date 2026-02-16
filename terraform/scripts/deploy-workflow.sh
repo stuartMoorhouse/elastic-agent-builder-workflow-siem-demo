@@ -35,9 +35,10 @@ print_step()  { echo -e "${BLUE}[STEP]${NC} $1"; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TERRAFORM_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
-WORKFLOWS_DIR="${PROJECT_DIR}/workflows"
+WORKFLOWS_DIR="${TERRAFORM_DIR}/workflows"
 
-AGENT_DEF="${WORKFLOWS_DIR}/agents/security-analyst.json"
+ALERT_ANALYZER_DEF="${WORKFLOWS_DIR}/agents/alert-analyzer.json"
+OSQUERY_GENERATOR_DEF="${WORKFLOWS_DIR}/agents/osquery-generator.json"
 WORKFLOW_DEF="${WORKFLOWS_DIR}/defend-alert-triage.yaml"
 
 ################################################################################
@@ -73,62 +74,84 @@ fi
 print_info "Kibana is reachable."
 
 ################################################################################
-# STEP 1: Create the Agent Builder agent
+# STEP 1: Remove old workflows and agents
 ################################################################################
 
-print_step "[1/4] Creating Agent Builder agent..."
+print_step "[1/6] Removing old workflows and agents..."
 
-if [[ ! -f "$AGENT_DEF" ]]; then
-    print_error "Agent definition not found: ${AGENT_DEF}"
-    exit 1
-fi
+WORKFLOW_NAME="Defend Alert Triage"
+AGENT_IDS=("alert-analyzer" "osquery-generator" "security-analyst")
 
-AGENT_NAME=$(jq -r '.name' "$AGENT_DEF")
+# Delete existing workflow by known ID (GET to check, DELETE if found)
+# We can't list workflows, so try to delete by the name embedded in YAML
+# by fetching each known workflow ID. Instead, we track the last deployed ID.
+print_info "Checking for old workflows..."
+# The workflow API doesn't support list, so we rely on the deploy creating
+# a new one each time. Old workflows must be cleaned up by ID if known.
 
-# Check if agent already exists
-EXISTING=$(curl -sk -u "${AUTH}" \
-    -H "kbn-xsrf: true" \
-    -H "x-elastic-internal-origin: Kibana" \
-    "${KIBANA_URL}/api/agent_builder/agents" 2>/dev/null \
-    | jq -r ".data[]? | select(.name == \"${AGENT_NAME}\") | .id" 2>/dev/null || echo "")
-
-if [[ -n "$EXISTING" ]]; then
-    print_info "Agent '${AGENT_NAME}' already exists (ID: ${EXISTING}). Updating..."
-    AGENT_RESPONSE=$(curl -sk -u "${AUTH}" \
-        -X PUT \
+# Delete existing agents
+for aid in "${AGENT_IDS[@]}"; do
+    HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -u "${AUTH}" \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
-        -H "Content-Type: application/json" \
-        "${KIBANA_URL}/api/agent_builder/agents/${EXISTING}" \
-        -d @"$AGENT_DEF" 2>/dev/null)
-    AGENT_ID="$EXISTING"
-else
-    print_info "Creating agent '${AGENT_NAME}'..."
-    AGENT_RESPONSE=$(curl -sk -u "${AUTH}" \
+        "${KIBANA_URL}/api/agent_builder/agents/${aid}" 2>/dev/null)
+    if [[ "$HTTP_CODE" == "200" ]]; then
+        print_info "Deleting agent '${aid}'..."
+        curl -sk -u "${AUTH}" \
+            -X DELETE \
+            -H "kbn-xsrf: true" \
+            -H "x-elastic-internal-origin: Kibana" \
+            "${KIBANA_URL}/api/agent_builder/agents/${aid}" > /dev/null 2>&1
+    fi
+done
+print_info "Cleanup complete."
+echo ""
+
+################################################################################
+# STEP 2: Create Agent Builder agents
+################################################################################
+
+print_step "[2/6] Creating Agent Builder agents..."
+
+create_agent() {
+    local def_file="$1"
+    local agent_name
+    agent_name=$(jq -r '.id' "$def_file")
+
+    if [[ ! -f "$def_file" ]]; then
+        print_error "Agent definition not found: ${def_file}"
+        return 1
+    fi
+
+    print_info "Creating agent '${agent_name}'..."
+    local response
+    response=$(curl -sk -u "${AUTH}" \
         -X POST \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
         -H "Content-Type: application/json" \
         "${KIBANA_URL}/api/agent_builder/agents" \
-        -d @"$AGENT_DEF" 2>/dev/null)
-    AGENT_ID=$(echo "$AGENT_RESPONSE" | jq -r '.id // .data.id // empty' 2>/dev/null || echo "")
-fi
+        -d @"$def_file" 2>/dev/null)
+    local agent_id
+    agent_id=$(echo "$response" | jq -r '.id // empty' 2>/dev/null || echo "")
 
-if [[ -z "$AGENT_ID" ]]; then
-    print_warn "Could not parse agent ID from response. Response:"
-    echo "$AGENT_RESPONSE" | jq . 2>/dev/null || echo "$AGENT_RESPONSE"
-    print_warn "Continuing — the agent may need to be created manually in Agent Builder UI."
-    AGENT_ID="security-analyst"
-else
-    print_info "Agent ID: ${AGENT_ID}"
-fi
+    if [[ -n "$agent_id" ]]; then
+        print_info "  Created: ${agent_id}"
+    else
+        print_warn "  Failed to create '${agent_name}'. Response:"
+        echo "$response" | jq . 2>/dev/null || echo "$response"
+    fi
+}
+
+create_agent "$ALERT_ANALYZER_DEF"
+create_agent "$OSQUERY_GENERATOR_DEF"
 echo ""
 
 ################################################################################
 # STEP 2: Create the reports index with mappings
 ################################################################################
 
-print_step "[2/4] Creating reports index..."
+print_step "[3/6] Creating reports index..."
 
 REPORTS_INDEX="siem-demo-reports"
 
@@ -174,10 +197,39 @@ fi
 echo ""
 
 ################################################################################
-# STEP 3: Look up the agent policy ID
+# STEP 3: Look up inference connector ID
 ################################################################################
 
-print_step "[3/4] Looking up Fleet agent policy..."
+print_step "[4/6] Looking up inference connector..."
+
+# Find an inference connector (type: inference.completion_stream or .inference)
+CONNECTOR_ID=$(curl -sk -u "${AUTH}" \
+    -H "kbn-xsrf: true" \
+    "${KIBANA_URL}/api/actions/connectors" 2>/dev/null \
+    | jq -r '[.[] | select(.connector_type_id == ".inference" or .connector_type_id == "inference.completion_stream")] | first | .id // empty' 2>/dev/null || echo "")
+
+if [[ -n "$CONNECTOR_ID" ]]; then
+    CONNECTOR_NAME=$(curl -sk -u "${AUTH}" \
+        -H "kbn-xsrf: true" \
+        "${KIBANA_URL}/api/actions/connectors" 2>/dev/null \
+        | jq -r ".[] | select(.id == \"${CONNECTOR_ID}\") | .name" 2>/dev/null || echo "unknown")
+    print_info "Found inference connector '${CONNECTOR_NAME}' (ID: ${CONNECTOR_ID})"
+else
+    print_warn "No inference connector found. Available connector types:"
+    curl -sk -u "${AUTH}" \
+        -H "kbn-xsrf: true" \
+        "${KIBANA_URL}/api/actions/connectors" 2>/dev/null \
+        | jq -r '.[].connector_type_id' 2>/dev/null | sort -u | head -20
+    print_warn "Create an inference connector in Kibana, or set connector_id manually in the workflow."
+    CONNECTOR_ID="REPLACE_ME"
+fi
+echo ""
+
+################################################################################
+# STEP 4: Look up the agent policy ID
+################################################################################
+
+print_step "[5/6] Looking up Fleet agent policy..."
 
 POLICY_NAME="SIEM Demo - Endpoint Security"
 POLICY_ID=$(curl -sk -u "${AUTH}" \
@@ -198,16 +250,17 @@ echo ""
 # STEP 4: Import the workflow
 ################################################################################
 
-print_step "[4/4] Importing workflow..."
+print_step "[6/6] Importing workflow..."
 
 if [[ ! -f "$WORKFLOW_DEF" ]]; then
     print_error "Workflow definition not found: ${WORKFLOW_DEF}"
     exit 1
 fi
 
-# Read the YAML and substitute the actual agent_id and policy_id
+# Read the YAML and substitute connector_id and policy_id
+# Agent IDs (alert-analyzer, osquery-generator) are already correct in the YAML
 WORKFLOW_YAML=$(cat "$WORKFLOW_DEF" \
-    | sed "s/agent_id: \"security-analyst\"/agent_id: \"${AGENT_ID}\"/" \
+    | sed "s/connector_id: \"REPLACE_ME\"/connector_id: \"${CONNECTOR_ID}\"/" \
     | sed "s/agent_policy_id: \"REPLACE_ME\"/agent_policy_id: \"${POLICY_ID}\"/")
 
 # Import via API — the YAML is sent as a JSON-escaped string
@@ -239,7 +292,9 @@ echo "=========================================="
 echo "Deployment Summary"
 echo "=========================================="
 echo ""
-print_info "Agent Builder agent:  ${AGENT_NAME} (${AGENT_ID})"
+print_info "Alert Analyzer agent: alert-analyzer"
+print_info "Osquery Generator:    osquery-generator"
+print_info "Inference connector:  ${CONNECTOR_ID}"
 print_info "Reports index:        ${REPORTS_INDEX}"
 print_info "Fleet policy:         ${POLICY_ID}"
 print_info "Workflow:             Defend Alert Triage (${WORKFLOW_ID:-manual import needed})"
