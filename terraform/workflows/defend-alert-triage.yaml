@@ -203,10 +203,10 @@ steps:
         with:
           agent_id: "{{ consts.report_writer_id }}"
           message: |
-            You are writing an incident report for a security team.
+            Write a security incident report using the template in your instructions.
 
-            An Elastic Defend alert fired on host
-            "{{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}". Here is the context:
+            SOURCE ALERT DATA:
+            {{ inputs.alerts[0] | default: event.alerts[0] | json }}
 
             VULNERABILITY ANALYSIS:
             {{ steps.analyze_alert.output }}
@@ -217,16 +217,6 @@ steps:
             FLEET SCAN RESULTS (all monitored hosts):
             Columns: {{ steps.fetch_fleet_results.output.columns | json }}
             Values: {{ steps.fetch_fleet_results.output.values | json }}
-
-            Write a structured incident report with these sections:
-            1. EXECUTIVE SUMMARY (2-3 sentences)
-            2. ALERT DETAILS (host, rule, timestamp, process info)
-            3. VULNERABILITY IDENTIFIED (CVE, affected software, versions)
-            4. FLEET IMPACT (which hosts are vulnerable based on scan results)
-            5. RECOMMENDED ACTIONS (prioritized list)
-            6. OSQUERY USED (include the query for reproducibility)
-
-            Use plain text, no markdown. Be concise and actionable.
         timeout: 5m
 
       - name: log_report
