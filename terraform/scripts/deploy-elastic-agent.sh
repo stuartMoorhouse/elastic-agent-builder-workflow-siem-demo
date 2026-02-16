@@ -12,7 +12,7 @@
 #
 # Usage:
 #   cd <project-root>
-#   ./scripts/deploy-elastic-agent.sh
+#   ./terraform/scripts/deploy-elastic-agent.sh
 #
 # The script reads all needed values from terraform outputs automatically.
 ################################################################################
@@ -32,8 +32,8 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 print_step()  { echo -e "${BLUE}[STEP]${NC} $1"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TERRAFORM_DIR="${PROJECT_DIR}/terraform"
+TERRAFORM_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
 
 ################################################################################
 # READ TERRAFORM OUTPUTS

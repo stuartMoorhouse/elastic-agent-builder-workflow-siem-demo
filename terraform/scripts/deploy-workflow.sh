@@ -13,7 +13,7 @@
 #
 # Usage:
 #   cd <project-root>
-#   ./scripts/deploy-workflow.sh
+#   ./terraform/scripts/deploy-workflow.sh
 #
 # The script reads Kibana URL and credentials from terraform outputs.
 ################################################################################
@@ -33,8 +33,8 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 print_step()  { echo -e "${BLUE}[STEP]${NC} $1"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-TERRAFORM_DIR="${PROJECT_DIR}/terraform"
+TERRAFORM_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
 WORKFLOWS_DIR="${PROJECT_DIR}/workflows"
 
 AGENT_DEF="${WORKFLOWS_DIR}/agents/security-analyst.json"
@@ -252,12 +252,6 @@ echo ""
 
 if [[ "$POLICY_ID" == "REPLACE_ME" ]]; then
     print_warn "REMINDER: Update agent_policy_id in the workflow after running deploy-elastic-agent.sh."
-fi
-
-SLACK_CONFIGURED=$(echo "$WORKFLOW_YAML" | grep -c "REPLACE_ME" || true)
-if [[ "$SLACK_CONFIGURED" -gt 0 ]]; then
-    print_warn "REMINDER: Update slack_webhook in the workflow with your Slack webhook URL."
-    echo "  Edit in Kibana: ${KIBANA_URL}/app/management/insightsAndAlerting/workflows"
 fi
 
 echo ""

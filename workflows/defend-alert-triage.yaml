@@ -3,8 +3,8 @@ description: >
   Triggered by any Elastic Defend alert. Sends the alert to an Agent Builder
   agent to identify the likely vulnerability, generates an osquery to check
   for that vulnerability across the fleet, validates the query on the source
-  host first, then runs it fleet-wide, produces a report, indexes it, and
-  sends a Slack notification.
+  host first, then runs it fleet-wide, produces a report, and indexes it to
+  the reports index. Slack notification is available but commented out.
 
 triggers:
   - type: alert
@@ -13,8 +13,8 @@ consts:
   # --- Update these for your environment ---
   agent_id: "security-analyst"           # Agent Builder agent ID (created by deploy-workflow.sh)
   agent_policy_id: "REPLACE_ME"          # Fleet agent policy covering monitored hosts
-  slack_webhook: "https://hooks.slack.com/services/REPLACE_ME"
   reports_index: "siem-demo-reports"
+  # slack_webhook: "https://hooks.slack.com/services/REPLACE_ME"  # Optional: uncomment to enable Slack notifications
 
 # ==========================================================================
 # STEP 1: Log the incoming alert
@@ -279,39 +279,43 @@ steps:
             Doc ID: {{ steps.index_report.output._id }}
 
       # ======================================================================
-      # STEP 9: Send Slack notification
+      # STEP 9: (Optional) Send Slack notification
+      # Uncomment the notify_slack step below and add slack_webhook to consts
+      # to enable Slack notifications.
       # ======================================================================
-      - name: notify_slack
-        type: http
-        with:
-          url: "{{ consts.slack_webhook }}"
-          method: POST
-          headers:
-            Content-Type: "application/json"
-          body:
-            text: |
-              *Defend Alert Triage Report*
-
-              *Alert:* {{ event.alerts[0]['kibana.alert.rule.name'] }}
-              *Source Host:* {{ event.alerts[0].host.name }}
-              *Time:* {{ event.alerts[0]['@timestamp'] }}
-
-              *Vulnerability:*
-              {{ steps.analyze_alert.output.response.message | truncate: 500 }}
-
-              *Fleet Scan:*
-              {{ steps.fetch_fleet_results.output.data.results | size }} host(s) returned results.
-
-              *Full Report:*
-              {{ steps.generate_report.output.response.message | truncate: 2000 }}
-
-              _Report indexed to `{{ consts.reports_index }}` (doc {{ steps.index_report.output._id }})_
-              _Workflow execution: {{ execution.id }}_
+      # - name: notify_slack
+      #   type: http
+      #   with:
+      #     url: "{{ consts.slack_webhook }}"
+      #     method: POST
+      #     headers:
+      #       Content-Type: "application/json"
+      #     body:
+      #       text: |
+      #         *Defend Alert Triage Report*
+      #
+      #         *Alert:* {{ event.alerts[0]['kibana.alert.rule.name'] }}
+      #         *Source Host:* {{ event.alerts[0].host.name }}
+      #         *Time:* {{ event.alerts[0]['@timestamp'] }}
+      #
+      #         *Vulnerability:*
+      #         {{ steps.analyze_alert.output.response.message | truncate: 500 }}
+      #
+      #         *Fleet Scan:*
+      #         {{ steps.fetch_fleet_results.output.data.results | size }} host(s) returned results.
+      #
+      #         *Full Report:*
+      #         {{ steps.generate_report.output.response.message | truncate: 2000 }}
+      #
+      #         _Report indexed to `{{ consts.reports_index }}` (doc {{ steps.index_report.output._id }})_
+      #         _Workflow execution: {{ execution.id }}_
 
       - name: log_complete
         type: console
         with:
-          message: "Triage complete. Report indexed and Slack notification sent."
+          message: >
+            Triage complete. Report indexed to {{ consts.reports_index }}
+            (doc {{ steps.index_report.output._id }}).
 
     # Test failed — log and notify
     else:
@@ -324,22 +328,39 @@ steps:
             Aborting fleet-wide scan. Review the generated query manually:
             {{ steps.store_query.output.osquery_sql }}
 
-      - name: notify_failure
-        type: http
+      - name: index_failure_report
+        type: elasticsearch.request
         with:
-          url: "{{ consts.slack_webhook }}"
           method: POST
-          headers:
-            Content-Type: "application/json"
+          path: "/{{ consts.reports_index }}/_doc"
           body:
-            text: |
-              *Defend Alert Triage — Query Validation Failed*
+            "@timestamp": "{{ 'now' | date: '%Y-%m-%dT%H:%M:%SZ' }}"
+            report_type: "defend_alert_triage_failed"
+            alert_id: "{{ event.alerts[0]._id }}"
+            alert_rule: "{{ event.alerts[0]['kibana.alert.rule.name'] }}"
+            source_host: "{{ event.alerts[0].host.name }}"
+            source_agent_id: "{{ event.alerts[0].agent.id }}"
+            vulnerability_analysis: "{{ steps.analyze_alert.output.response.message }}"
+            osquery_sql: "{{ steps.store_query.output.osquery_sql }}"
+            report: "Query validation failed on source host. Manual investigation required."
+            execution_id: "{{ execution.id }}"
 
-              Alert fired on *{{ event.alerts[0].host.name }}* but the
-              AI-generated osquery failed validation on the source host.
-
-              *Generated query:*
-              ```{{ steps.store_query.output.osquery_sql }}```
-
-              Manual investigation required.
-              _Workflow execution: {{ execution.id }}_
+      # - name: notify_failure
+      #   type: http
+      #   with:
+      #     url: "{{ consts.slack_webhook }}"
+      #     method: POST
+      #     headers:
+      #       Content-Type: "application/json"
+      #     body:
+      #       text: |
+      #         *Defend Alert Triage — Query Validation Failed*
+      #
+      #         Alert fired on *{{ event.alerts[0].host.name }}* but the
+      #         AI-generated osquery failed validation on the source host.
+      #
+      #         *Generated query:*
+      #         ```{{ steps.store_query.output.osquery_sql }}```
+      #
+      #         Manual investigation required.
+      #         _Workflow execution: {{ execution.id }}_

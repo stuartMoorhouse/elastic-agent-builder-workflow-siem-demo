@@ -316,7 +316,7 @@ resource "null_resource" "redteam_scripts" {
   depends_on = [aws_instance.redteam]
 
   triggers = {
-    script_hash = filemd5("${path.module}/../scripts/host-scan.sh")
+    host_scan_hash = filemd5("${path.module}/scripts/host-scan.sh")
   }
 
   # Wait for cloud-init to complete
@@ -336,9 +336,9 @@ resource "null_resource" "redteam_scripts" {
     }
   }
 
-  # Copy the attack script
+  # Copy attack script
   provisioner "file" {
-    source      = "${path.module}/../scripts/host-scan.sh"
+    source      = "${path.module}/scripts/host-scan.sh"
     destination = "/home/ubuntu/scripts/host-scan.sh"
 
     connection {
@@ -362,5 +362,56 @@ resource "null_resource" "redteam_scripts" {
       private_key = tls_private_key.ssh.private_key_pem
       host        = aws_instance.redteam.public_ip
     }
+  }
+}
+
+# Deploy Elastic Agent to all host VMs
+# Runs locally — the script reads terraform outputs and SSHes into each host.
+resource "null_resource" "deploy_elastic_agent" {
+  depends_on = [
+    ec_deployment.main,
+    terraform_data.kibana_default_space_security,
+    aws_instance.host,
+    null_resource.redteam_scripts,
+  ]
+
+  triggers = {
+    script_hash = filemd5("${path.module}/scripts/deploy-elastic-agent.sh")
+  }
+
+  provisioner "local-exec" {
+    command     = "bash ${path.module}/scripts/deploy-elastic-agent.sh"
+    working_dir = path.module
+  }
+}
+
+# Deploy Agent Builder agent + workflow via Kibana/ES APIs
+# Runs locally after Elastic Agent is deployed (needs the Fleet policy to exist).
+resource "null_resource" "deploy_workflow" {
+  depends_on = [null_resource.deploy_elastic_agent]
+
+  triggers = {
+    script_hash = filemd5("${path.module}/scripts/deploy-workflow.sh")
+  }
+
+  provisioner "local-exec" {
+    command     = "bash ${path.module}/scripts/deploy-workflow.sh"
+    working_dir = path.module
+  }
+}
+
+# Generate the presenter's demo script with actual IPs and URLs
+resource "null_resource" "generate_demo_script" {
+  depends_on = [null_resource.deploy_workflow]
+
+  triggers = {
+    script_hash = filemd5("${path.module}/scripts/generate-demo-script.sh")
+    host_ips    = jsonencode([for i in aws_instance.host : i.public_ip])
+    redteam_ip  = aws_instance.redteam.public_ip
+  }
+
+  provisioner "local-exec" {
+    command     = "bash ${path.module}/scripts/generate-demo-script.sh"
+    working_dir = path.module
   }
 }
