@@ -61,6 +61,13 @@ resource "aws_vpc_security_group_ingress_rule" "redteam_ssh" {
   cidr_ipv4         = var.allowed_ssh_cidr
 }
 
+resource "aws_vpc_security_group_ingress_rule" "redteam_from_hosts" {
+  security_group_id            = aws_security_group.redteam.id
+  description                  = "All traffic from hosts (reverse shells)"
+  ip_protocol                  = "-1"
+  referenced_security_group_id = aws_security_group.host.id
+}
+
 resource "aws_vpc_security_group_egress_rule" "redteam_all_out" {
   security_group_id = aws_security_group.redteam.id
   description       = "All outbound traffic"

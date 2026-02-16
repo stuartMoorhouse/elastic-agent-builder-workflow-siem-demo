@@ -47,6 +47,19 @@ output "host_public_ips" {
   }
 }
 
+output "host_private_ips" {
+  description = "Private IP addresses of the host VMs"
+  value = {
+    for i, instance in aws_instance.host :
+    "host-0${i + 1}" => instance.private_ip
+  }
+}
+
+output "redteam_private_ip" {
+  description = "Private IP address of the red team VM"
+  value       = aws_instance.redteam.private_ip
+}
+
 output "redteam_public_ip" {
   description = "Public IP address of the red team VM"
   value       = aws_instance.redteam.public_ip
@@ -61,11 +74,11 @@ output "ssh_command_hosts" {
   description = "SSH commands for host VMs"
   value = {
     for i, instance in aws_instance.host :
-    "host-0${i + 1}" => "ssh -i ${local_file.ssh_private_key.filename} ec2-user@${instance.public_ip}"
+    "host-0${i + 1}" => "ssh -i ${local_file.ssh_private_key.filename} ubuntu@${instance.public_ip}"
   }
 }
 
 output "ssh_command_redteam" {
   description = "SSH command for red team VM"
-  value       = "ssh -i ${local_file.ssh_private_key.filename} ec2-user@${aws_instance.redteam.public_ip}"
+  value       = "ssh -i ${local_file.ssh_private_key.filename} ubuntu@${aws_instance.redteam.public_ip}"
 }

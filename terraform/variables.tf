@@ -66,10 +66,16 @@ variable "aws_instance_type_redteam" {
   default     = "t3.medium"
 }
 
-variable "aws_ami" {
-  description = "AMI ID for EC2 instances (Amazon Linux 2023)"
+variable "aws_ami_owner" {
+  description = "Owner ID for AMI lookup (Canonical for Ubuntu)"
   type        = string
-  default     = "ami-0c1fe732b5494dc14"
+  default     = "099720109477"
+}
+
+variable "aws_ami_name_filter" {
+  description = "Name filter for AMI lookup"
+  type        = string
+  default     = "ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"
 }
 
 variable "vpc_cidr" {
