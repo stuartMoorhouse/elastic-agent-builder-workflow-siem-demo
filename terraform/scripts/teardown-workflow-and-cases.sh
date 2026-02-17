@@ -6,6 +6,7 @@
 # Usage:
 #   cd <project-root>
 #   ./terraform/scripts/teardown-workflow-and-cases.sh
+#   ./terraform/scripts/teardown-workflow-and-cases.sh workflow-<uuid>  # extra IDs
 ################################################################################
 
 set -e
@@ -21,6 +22,9 @@ print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TERRAFORM_DIR="$(dirname "$SCRIPT_DIR")"
+PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
+STATE_DIR="${PROJECT_DIR}/state"
+WORKFLOW_ID_FILE="${STATE_DIR}/workflow-id"
 
 cd "$TERRAFORM_DIR"
 
@@ -35,54 +39,46 @@ echo "=========================================="
 echo ""
 
 # --------------------------------------------------------------------------
-# Delete all workflows
+# Delete workflows
 # --------------------------------------------------------------------------
-print_info "Searching for workflows..."
-
-# Fetch workflow IDs from the .kibana alerting cases index
-ES_URL=$(terraform output -raw elasticsearch_endpoint)
-WORKFLOW_IDS=$(curl -sk -u "${AUTH}" \
-    "${ES_URL}/.kibana_alerting_cases*/_search" \
-    -H "Content-Type: application/json" \
-    -d '{"query":{"term":{"type":"workflow"}},"size":100,"_source":false}' 2>/dev/null \
-    | jq -r '.hits.hits[]._id // empty' 2>/dev/null \
-    | sed 's/^workflow://' || echo "")
-
-if [[ -z "$WORKFLOW_IDS" ]]; then
-    # Fallback: try fetching known workflow names via saved objects
-    WORKFLOW_IDS=$(curl -sk -u "${AUTH}" \
-        -H "kbn-xsrf: true" \
-        -H "x-elastic-internal-origin: Kibana" \
-        "${KIBANA_URL}/api/saved_objects/_find?type=workflow&per_page=100" 2>/dev/null \
-        | jq -r '.saved_objects[]?.id // empty' 2>/dev/null || echo "")
-fi
-
 FOUND=0
-for wid in $WORKFLOW_IDS; do
-    print_info "Deleting workflow ${wid}..."
-    curl -sk -u "${AUTH}" \
-        -X DELETE \
-        -H "kbn-xsrf: true" \
-        -H "x-elastic-internal-origin: Kibana" \
-        "${KIBANA_URL}/api/workflows/${wid}" > /dev/null 2>&1
-    FOUND=$((FOUND + 1))
-done
 
-if [[ "$FOUND" -eq 0 ]]; then
-    print_warn "No workflows found via index search. Listing any known IDs from recent deploys..."
-    print_warn "If workflows remain, delete them manually or pass IDs as arguments:"
-    print_warn "  $0 workflow-<uuid>"
+# Read last deployed workflow ID from state file
+if [[ -f "$WORKFLOW_ID_FILE" ]]; then
+    SAVED_ID=$(cat "$WORKFLOW_ID_FILE")
+    if [[ -n "$SAVED_ID" ]]; then
+        print_info "Deleting workflow ${SAVED_ID} (from state file)..."
+        HTTP_CODE=$(curl -sk -u "${AUTH}" \
+            -X DELETE \
+            -H "kbn-xsrf: true" \
+            -H "x-elastic-internal-origin: Kibana" \
+            -o /dev/null -w "%{http_code}" \
+            "${KIBANA_URL}/api/workflows/${SAVED_ID}" 2>/dev/null)
+        if [[ "$HTTP_CODE" == "200" ]]; then
+            FOUND=$((FOUND + 1))
+        else
+            print_warn "Workflow ${SAVED_ID} not found (HTTP ${HTTP_CODE}), may already be deleted."
+        fi
+        rm -f "$WORKFLOW_ID_FILE"
+    fi
+else
+    print_warn "No state/workflow-id file found. Pass workflow IDs as arguments if needed."
 fi
 
-# Delete workflows passed as arguments
+# Delete any extra workflows passed as arguments
 for wid in "$@"; do
     print_info "Deleting workflow ${wid}..."
-    curl -sk -u "${AUTH}" \
+    HTTP_CODE=$(curl -sk -u "${AUTH}" \
         -X DELETE \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
-        "${KIBANA_URL}/api/workflows/${wid}" > /dev/null 2>&1
-    FOUND=$((FOUND + 1))
+        -o /dev/null -w "%{http_code}" \
+        "${KIBANA_URL}/api/workflows/${wid}" 2>/dev/null)
+    if [[ "$HTTP_CODE" == "200" ]]; then
+        FOUND=$((FOUND + 1))
+    else
+        print_warn "Workflow ${wid} not found (HTTP ${HTTP_CODE})."
+    fi
 done
 
 print_info "Deleted ${FOUND} workflow(s)."

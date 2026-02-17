@@ -12,7 +12,7 @@ kibana_size       = "1g"
 kibana_zone_count = 1
 
 # AWS Configuration
-aws_region = "us-east-1"
+aws_region = "eu-north-1"
 aws_tags = {
   division   = "your-division"
   org        = "your-org"
@@ -22,8 +22,8 @@ aws_tags = {
 }
 
 # AWS Instance Types
-aws_instance_type_host    = "t3.small"
-aws_instance_type_redteam = "t3.medium"
+aws_instance_type_host    = "t3.large"
+aws_instance_type_redteam = "t3.large"
 
 # AWS Networking
 vpc_cidr           = "10.0.0.0/16"

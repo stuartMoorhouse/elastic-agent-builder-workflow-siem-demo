@@ -27,18 +27,6 @@ steps:
     with:
       agent_id: "{{ consts.alert_analyzer_id }}"
       message: |
-        An endpoint detection alert fired on a host in our environment.
-        Analyze the alert data below and determine:
-
-        1. What vulnerability was most likely exploited?
-        2. What CVE is it associated with?
-        3. What software component is affected?
-        4. What versions are vulnerable?
-        5. What would you look for on disk to confirm a host is vulnerable?
-
-        Provide a concise analysis (3-5 sentences), then state the CVE ID
-        and affected software clearly.
-
         Alert data:
         {{ inputs.alerts[0] | default: event.alerts[0] | json }}
     timeout: 5m
@@ -51,21 +39,10 @@ steps:
     with:
       agent_id: "{{ consts.osquery_generator_id }}"
       message: |
-        Based on this vulnerability analysis, write an osquery SQL query
-        that can detect whether a Linux host is vulnerable.
-
-        Analysis:
+        Vulnerability analysis:
         {{ steps.analyze_alert.output }}
 
-        Requirements:
-        - The query must use only standard osquery tables (file, hash,
-          process_open_sockets, processes, etc.)
-        - It should scan common application directories for vulnerable
-          files (JARs, libraries, binaries)
-        - Return the file path, filename, and any version info
-
-        IMPORTANT: Return ONLY the raw SQL query. No markdown code fences,
-        no explanation, no commentary. Just the SELECT statement.
+        Return ONLY the raw SQL query — no markdown, no explanation.
     timeout: 3m
 
   # ==========================================================================
@@ -82,71 +59,35 @@ steps:
           - "{{ consts.agent_policy_id }}"
         timeout: 300
 
-  # Wait for fleet results — poll every 5s after initial 10s wait
-  - name: wait_initial
-    type: wait
-    with:
-      duration: 10s
-
-  - name: check_status_1
-    type: kibana.request
-    with:
-      method: GET
-      path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
-
-  - name: retry_1
-    type: if
-    condition: "${{ steps.check_status_1.output.data.status != 'completed' }}"
+  # Poll for osquery completion — up to 6 attempts, 5s apart
+  - name: poll_for_results
+    type: foreach
+    foreach: "[1,2,3,4,5,6]"
     steps:
-      - name: wait_retry_1
+      - name: wait_between_polls
         type: wait
         with:
           duration: 5s
-
-      - name: check_status_2
+      - name: check_status
         type: kibana.request
         with:
           method: GET
           path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
-
-      - name: retry_2
+      - name: skip_if_done
         type: if
-        condition: "${{ steps.check_status_2.output.data.status != 'completed' }}"
+        condition: "steps.check_status.output.data.status != completed"
         steps:
-          - name: wait_retry_2
-            type: wait
+          - name: still_waiting
+            type: console
             with:
-              duration: 5s
+              message: "Poll {{ foreach.index }}: osquery still running..."
 
-          - name: check_status_3
-            type: kibana.request
-            with:
-              method: GET
-              path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
-
-          - name: retry_3
-            type: if
-            condition: "${{ steps.check_status_3.output.data.status != 'completed' }}"
-            steps:
-              - name: wait_retry_3
-                type: wait
-                with:
-                  duration: 5s
-
-              - name: check_status_4
-                type: kibana.request
-                with:
-                  method: GET
-                  path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
-
-              - name: retry_4
-                type: if
-                condition: "${{ steps.check_status_4.output.data.status != 'completed' }}"
-                steps:
-                  - name: wait_retry_4
-                    type: wait
-                    with:
-                      duration: 5s
+  # Final fetch to guarantee we have completed results
+  - name: get_final_results
+    type: kibana.request
+    with:
+      method: GET
+      path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
 
   # Fetch fleet results from ES index
   - name: fetch_fleet_results
