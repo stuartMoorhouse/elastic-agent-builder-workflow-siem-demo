@@ -47,6 +47,19 @@ resource "terraform_data" "kibana_default_space_security" {
         -H "Content-Type: application/json" \
         -u "${self.input.username}:${self.input.password}" \
         -d '{"id":"default","name":"Default","description":"This is your default space!","solution":"security"}'
+
+      # Enable Elastic Workflows UI (the /api/kibana/settings endpoint is blocked
+      # in Security solution view, so we set it via the config saved object directly)
+      KIBANA_VERSION=$(curl -s "${self.input.kibana_endpoint}/api/status" \
+        -u "${self.input.username}:${self.input.password}" | \
+        python3 -c "import sys,json; print(json.load(sys.stdin)['version']['number'])")
+
+      curl -s -X PUT \
+        "${self.input.kibana_endpoint}/api/saved_objects/config/$${KIBANA_VERSION}" \
+        -H "kbn-xsrf: true" \
+        -H "Content-Type: application/json" \
+        -u "${self.input.username}:${self.input.password}" \
+        -d '{"attributes":{"workflows:ui:enabled":true}}'
     EOT
   }
 }

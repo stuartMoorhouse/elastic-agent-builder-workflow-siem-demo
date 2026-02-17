@@ -15,8 +15,8 @@ consts:
   alert_analyzer_id: "alert-analyzer"    # Agent for CVE/vulnerability analysis
   osquery_generator_id: "osquery-generator"  # Agent for osquery SQL generation
   report_writer_id: "report-writer"    # Agent for incident report generation
-  connector_id: "Anthropic-Claude-Opus-4-5"             # Inference connector ID for AI agent steps
-  agent_policy_id: "356a60cd-f2b4-48ca-b609-0ee44ccdec4a"          # Fleet agent policy covering monitored hosts
+  connector_id: ""             # Set by deploy-workflow.sh at deploy time
+  agent_policy_id: ""          # Set by deploy-workflow.sh at deploy time
 
 steps:
   # ==========================================================================
@@ -59,30 +59,13 @@ steps:
           - "{{ consts.agent_policy_id }}"
         timeout: 300
 
-  # Poll for osquery completion — up to 6 attempts, 5s apart
-  - name: poll_for_results
-    type: foreach
-    foreach: "[1,2,3,4,5,6]"
-    steps:
-      - name: wait_between_polls
-        type: wait
-        with:
-          duration: 5s
-      - name: check_status
-        type: kibana.request
-        with:
-          method: GET
-          path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
-      - name: skip_if_done
-        type: if
-        condition: "steps.check_status.output.data.status != completed"
-        steps:
-          - name: still_waiting
-            type: console
-            with:
-              message: "Poll {{ foreach.index }}: osquery still running..."
+  # Wait for osquery to complete across all agents
+  - name: wait_for_osquery
+    type: wait
+    with:
+      duration: 20s
 
-  # Final fetch to guarantee we have completed results
+  # Fetch final osquery results
   - name: get_final_results
     type: kibana.request
     with:

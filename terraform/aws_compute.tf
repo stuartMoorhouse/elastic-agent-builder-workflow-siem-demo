@@ -33,7 +33,7 @@ resource "local_file" "ssh_private_key" {
 
 # Per-host configuration for the Log4Shell scenario
 # - solr-kb and solr-support: Solr 8.11.0 on old JDK 8u181 (VULNERABLE)
-# - solr-catalog: Solr 8.11.1 on JDK 8u352 (PATCHED)
+# All three hosts run Solr 8.11.0 on JDK 8u181 (VULNERABLE)
 locals {
   host_configs = [
     {
@@ -58,9 +58,9 @@ locals {
       name         = "solr-catalog"
       hostname     = "siem-demo-solr-catalog"
       role_label   = "Product Catalog"
-      solr_version = "8.11.1"
-      jdk_url      = "https://cdn.azul.com/zulu/bin/zulu8.66.0.15-jdk8.0.352-linux_x64.tar.gz"
-      jdk_dir      = "zulu8.66.0.15-jdk8.0.352-linux_x64"
+      solr_version = "8.11.0"
+      jdk_url      = "https://cdn.azul.com/zulu/bin/zulu8.31.0.1-jdk8.0.181-linux_x64.tar.gz"
+      jdk_dir      = "zulu8.31.0.1-jdk8.0.181-linux_x64"
       core_name    = "product-catalog"
     },
   ]
@@ -116,7 +116,16 @@ resource "aws_instance" "host" {
               # Install specific JDK version
               echo "[3/8] Installing JDK from $${JDK_URL}..."
               cd /tmp
-              wget -q "$${JDK_URL}" -O jdk.tar.gz
+              for attempt in 1 2 3; do
+                echo "  Download attempt $attempt/3..."
+                wget -q --timeout=60 --tries=3 "$${JDK_URL}" -O jdk.tar.gz && break
+                echo "  Attempt $attempt failed, retrying in 10s..."
+                sleep 10
+              done
+              if [ ! -s jdk.tar.gz ]; then
+                echo "[ERROR] Failed to download JDK after all attempts"
+                exit 1
+              fi
               mkdir -p /opt/java
               tar xzf jdk.tar.gz -C /opt/java
               JAVA_HOME="/opt/java/$${JDK_DIR}"
