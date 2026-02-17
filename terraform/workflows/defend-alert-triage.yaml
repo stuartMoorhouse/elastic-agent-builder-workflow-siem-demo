@@ -2,10 +2,10 @@ name: Defend Alert Triage
 enabled: true
 description: >
   Triggered by any Elastic Defend alert. Sends the alert to an Agent Builder
-  agent to identify the likely vulnerability, generates an osquery to check
-  for that vulnerability across the fleet, validates the query on the source
-  host first, then runs it fleet-wide, produces a report, and indexes it to
-  the reports index. Supports manual execution with JSON alert input.
+  agent to identify the likely vulnerability, generates an osquery to scan
+  the fleet for that vulnerability, produces a report, indexes it, and
+  creates an Elastic Security Case. Supports manual execution with JSON
+  alert input.
 
 triggers:
   - type: alert
@@ -19,23 +19,9 @@ consts:
   agent_policy_id: "356a60cd-f2b4-48ca-b609-0ee44ccdec4a"          # Fleet agent policy covering monitored hosts
   reports_index: "siem-demo-reports"
 
-# ==========================================================================
-# STEP 1: Log the incoming alert
-# Alert data comes from event.alerts[] (alert trigger) or inputs.alerts[]
-# (manual run). The default filter handles both cases.
-# ==========================================================================
 steps:
-  - name: log_alert
-    type: console
-    with:
-      message: >
-        Defend alert received.
-        Rule: {{ event.alerts[0]['kibana.alert.rule.name'] | default: inputs.alerts[0]['kibana.alert.rule.name'] }}
-        Host: {{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}
-        Agent: {{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}
-
   # ==========================================================================
-  # STEP 2: Agent Builder — Analyze the alert and identify the vulnerability
+  # STEP 1: Agent Builder — Analyze the alert and identify the vulnerability
   # ==========================================================================
   - name: analyze_alert
     type: ai.agent
@@ -58,15 +44,8 @@ steps:
         {{ inputs.alerts[0] | default: event.alerts[0] | json }}
     timeout: 5m
 
-  - name: log_analysis
-    type: console
-    with:
-      message: >
-        AI analysis complete:
-        {{ steps.analyze_alert.output }}
-
   # ==========================================================================
-  # STEP 3: Agent Builder — Generate an osquery to detect the vulnerability
+  # STEP 2: Agent Builder — Generate an osquery to detect the vulnerability
   # ==========================================================================
   - name: generate_osquery
     type: ai.agent
@@ -90,177 +69,93 @@ steps:
         no explanation, no commentary. Just the SELECT statement.
     timeout: 3m
 
-  - name: log_query
-    type: console
-    with:
-      message: "Generated osquery: {{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
-
   # ==========================================================================
-  # STEP 4: Test the osquery on the source host only
+  # STEP 3: Run the osquery across the full fleet
   # ==========================================================================
-  - name: test_osquery
+  - name: run_fleet_query
     type: kibana.request
     with:
       method: POST
       path: /api/osquery/live_queries
       body:
         query: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
-        agent_ids:
-          - "{{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}"
-        timeout: 120
+        agent_policy_ids:
+          - "{{ consts.agent_policy_id }}"
+        timeout: 300
 
-  - name: log_test_started
-    type: console
-    with:
-      message: >
-        Osquery test submitted (action {{ steps.test_osquery.output.data.queries[0].action_id }}).
-        Running on source host {{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }} only.
-
-  # Wait for the test query to complete
-  - name: wait_for_test
+  # Wait for fleet results
+  - name: wait_for_fleet
     type: wait
     with:
-      duration: 30s
+      duration: 60s
 
-  # Fetch test result count from ES index
-  - name: fetch_test_count
+  # Fetch fleet results from ES index
+  - name: fetch_fleet_results
     type: elasticsearch.esql.query
     with:
       format: json
       query: >
         FROM logs-osquery_manager.result-default
-        | WHERE action_id == "{{ steps.test_osquery.output.data.queries[0].action_id }}"
-        | STATS result_count = COUNT(*)
+        | WHERE action_id == "{{ steps.run_fleet_query.output.data.queries[0].action_id }}"
+        | KEEP host.name, osquery.path, osquery.filename, osquery.directory, action_id, @timestamp
 
-  - name: log_test_results
-    type: console
+  # ==========================================================================
+  # STEP 4: Agent Builder — Produce the final report
+  # ==========================================================================
+  - name: generate_report
+    type: ai.agent
     with:
-      message: "Test query rows returned: {{ steps.fetch_test_count.output.values[0][0] }}."
+      agent_id: "{{ consts.report_writer_id }}"
+      message: |
+        Write a security incident report using the template in your instructions.
+
+        SOURCE ALERT DATA:
+        {{ inputs.alerts[0] | default: event.alerts[0] | json }}
+
+        VULNERABILITY ANALYSIS:
+        {{ steps.analyze_alert.output }}
+
+        OSQUERY USED:
+        {{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}
+
+        FLEET SCAN RESULTS (all monitored hosts):
+        Columns: {{ steps.fetch_fleet_results.output.columns | json }}
+        Values: {{ steps.fetch_fleet_results.output.values | json }}
+    timeout: 5m
 
   # ==========================================================================
-  # STEP 5: Validate test results before proceeding
+  # STEP 5: Index the report to Elasticsearch
   # ==========================================================================
-  - name: check_test
-    type: if
-    condition: "${{ steps.fetch_test_count.output.values[0][0] > 0 }}"
-    steps:
-      # Test passed — run fleet-wide
-      - name: log_test_passed
-        type: console
-        with:
-          message: "Test query succeeded on source host. Running fleet-wide."
+  - name: index_report
+    type: elasticsearch.request
+    with:
+      method: POST
+      path: "/{{ consts.reports_index }}/_doc"
+      body:
+        "@timestamp": "{{ 'now' | date: '%Y-%m-%dT%H:%M:%SZ' }}"
+        report_type: "defend_alert_triage"
+        alert_id: "{{ event.alerts[0]._id | default: inputs.alerts[0]._id }}"
+        alert_rule: "{{ event.alerts[0]['kibana.alert.rule.name'] | default: inputs.alerts[0]['kibana.alert.rule.name'] }}"
+        source_host: "{{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}"
+        source_agent_id: "{{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}"
+        vulnerability_analysis: "{{ steps.analyze_alert.output | strip }}"
+        osquery_sql: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
+        fleet_results: ${{ steps.fetch_fleet_results.output.values }}
+        fleet_columns: ${{ steps.fetch_fleet_results.output.columns }}
+        report: "{{ steps.generate_report.output | strip }}"
+        execution_id: "{{ execution.id }}"
 
-      # ======================================================================
-      # STEP 6: Run the osquery across the full fleet
-      # ======================================================================
-      - name: run_fleet_query
-        type: kibana.request
-        with:
-          method: POST
-          path: /api/osquery/live_queries
-          body:
-            query: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
-            agent_policy_ids:
-              - "{{ consts.agent_policy_id }}"
-            timeout: 300
-
-      - name: log_fleet_started
-        type: console
-        with:
-          message: >
-            Fleet-wide osquery submitted (action {{ steps.run_fleet_query.output.data.queries[0].action_id }}).
-            Waiting for results...
-
-      # Wait for fleet results
-      - name: wait_for_fleet
-        type: wait
-        with:
-          duration: 60s
-
-      # Fetch fleet results from ES index
-      - name: fetch_fleet_results
-        type: elasticsearch.esql.query
-        with:
-          format: json
-          query: >
-            FROM logs-osquery_manager.result-default
-            | WHERE action_id == "{{ steps.run_fleet_query.output.data.queries[0].action_id }}"
-            | KEEP host.name, osquery.path, osquery.filename, osquery.directory, action_id, @timestamp
-
-      - name: log_fleet_results
-        type: console
-        with:
-          message: >
-            Fleet query returned {{ steps.fetch_fleet_results.output.values | size | default: 0 }} result(s).
-            Columns: {{ steps.fetch_fleet_results.output.columns | json }}
-            Results: {{ steps.fetch_fleet_results.output.values | json }}
-
-      # ======================================================================
-      # STEP 7: Agent Builder — Produce the final report
-      # ======================================================================
-      - name: generate_report
-        type: ai.agent
-        with:
-          agent_id: "{{ consts.report_writer_id }}"
-          message: |
-            Write a security incident report using the template in your instructions.
-
-            SOURCE ALERT DATA:
-            {{ inputs.alerts[0] | default: event.alerts[0] | json }}
-
-            VULNERABILITY ANALYSIS:
-            {{ steps.analyze_alert.output }}
-
-            OSQUERY USED:
-            {{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}
-
-            FLEET SCAN RESULTS (all monitored hosts):
-            Columns: {{ steps.fetch_fleet_results.output.columns | json }}
-            Values: {{ steps.fetch_fleet_results.output.values | json }}
-        timeout: 5m
-
-      - name: log_report
-        type: console
-        with:
-          message: >
-            Report generated:
-            {{ steps.generate_report.output }}
-
-      # ======================================================================
-      # STEP 8: Index the report to Elasticsearch
-      # ======================================================================
-      - name: index_report
-        type: elasticsearch.request
-        with:
-          method: POST
-          path: "/{{ consts.reports_index }}/_doc"
-          body:
-            "@timestamp": "{{ 'now' | date: '%Y-%m-%dT%H:%M:%SZ' }}"
-            report_type: "defend_alert_triage"
-            alert_id: "{{ event.alerts[0]._id | default: inputs.alerts[0]._id }}"
-            alert_rule: "{{ event.alerts[0]['kibana.alert.rule.name'] | default: inputs.alerts[0]['kibana.alert.rule.name'] }}"
-            source_host: "{{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}"
-            source_agent_id: "{{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}"
-            vulnerability_analysis: "{{ steps.analyze_alert.output | strip }}"
-            osquery_sql: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
-            fleet_results: ${{ steps.fetch_fleet_results.output.values }}
-            fleet_columns: ${{ steps.fetch_fleet_results.output.columns }}
-            report: "{{ steps.generate_report.output | strip }}"
-            execution_id: "{{ execution.id }}"
-
-      - name: log_indexed
-        type: console
-        with:
-          message: >
-            Report indexed to {{ consts.reports_index }}.
-            Doc ID: {{ steps.index_report.output._id }}
-
-    else:
-      - name: log_test_failed
-        type: console
-        with:
-          message: >
-            Osquery test returned 0 results on source host
-            {{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}. Aborting fleet-wide scan.
-            Review the generated query manually:
-            {{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}
+  # ==========================================================================
+  # STEP 6: Create an Elastic Security Case from the report
+  # ==========================================================================
+  - name: create_case
+    type: kibana.createCaseDefaultSpace
+    with:
+      owner: securitySolution
+      title: "Defend Alert Triage: {{ event.alerts[0]['kibana.alert.rule.name'] | default: inputs.alerts[0]['kibana.alert.rule.name'] }}"
+      description: "{{ steps.generate_report.output | strip }}"
+      severity: high
+      tags:
+        - automated
+        - defend-alert-triage
+        - workflow

@@ -18,10 +18,22 @@ terraform {
       source  = "hashicorp/null"
       version = "~> 3.0"
     }
+    elasticstack = {
+      source  = "elastic/elasticstack"
+      version = "~> 0.11"
+    }
   }
 }
 
 provider "ec" {} # Uses EC_API_KEY from environment
+
+provider "elasticstack" {
+  elasticsearch {
+    username  = ec_deployment.main.elasticsearch_username
+    password  = ec_deployment.main.elasticsearch_password
+    endpoints = [ec_deployment.main.elasticsearch.https_endpoint]
+  }
+}
 
 provider "aws" {
   region  = var.aws_region

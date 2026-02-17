@@ -94,3 +94,9 @@ variable "allowed_ssh_cidr" {
   description = "CIDR block allowed to SSH into instances (e.g. your IP/32)"
   type        = string
 }
+
+variable "cases_user_password" {
+  description = "Password for the ronny_arbetsflode Cases viewer user"
+  type        = string
+  sensitive   = true
+}
