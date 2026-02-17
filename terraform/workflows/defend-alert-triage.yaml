@@ -17,7 +17,6 @@ consts:
   report_writer_id: "report-writer"    # Agent for incident report generation
   connector_id: "Anthropic-Claude-Opus-4-5"             # Inference connector ID for AI agent steps
   agent_policy_id: "356a60cd-f2b4-48ca-b609-0ee44ccdec4a"          # Fleet agent policy covering monitored hosts
-  reports_index: "siem-demo-reports"
 
 steps:
   # ==========================================================================
@@ -83,11 +82,71 @@ steps:
           - "{{ consts.agent_policy_id }}"
         timeout: 300
 
-  # Wait for fleet results
-  - name: wait_for_fleet
+  # Wait for fleet results — poll every 5s after initial 10s wait
+  - name: wait_initial
     type: wait
     with:
-      duration: 60s
+      duration: 10s
+
+  - name: check_status_1
+    type: kibana.request
+    with:
+      method: GET
+      path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
+
+  - name: retry_1
+    type: if
+    condition: "${{ steps.check_status_1.output.data.status != 'completed' }}"
+    steps:
+      - name: wait_retry_1
+        type: wait
+        with:
+          duration: 5s
+
+      - name: check_status_2
+        type: kibana.request
+        with:
+          method: GET
+          path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
+
+      - name: retry_2
+        type: if
+        condition: "${{ steps.check_status_2.output.data.status != 'completed' }}"
+        steps:
+          - name: wait_retry_2
+            type: wait
+            with:
+              duration: 5s
+
+          - name: check_status_3
+            type: kibana.request
+            with:
+              method: GET
+              path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
+
+          - name: retry_3
+            type: if
+            condition: "${{ steps.check_status_3.output.data.status != 'completed' }}"
+            steps:
+              - name: wait_retry_3
+                type: wait
+                with:
+                  duration: 5s
+
+              - name: check_status_4
+                type: kibana.request
+                with:
+                  method: GET
+                  path: "/api/osquery/live_queries/{{ steps.run_fleet_query.output.data.action_id }}"
+
+              - name: retry_4
+                type: if
+                condition: "${{ steps.check_status_4.output.data.status != 'completed' }}"
+                steps:
+                  - name: wait_retry_4
+                    type: wait
+                    with:
+                      duration: 5s
 
   # Fetch fleet results from ES index
   - name: fetch_fleet_results
@@ -97,7 +156,7 @@ steps:
       query: >
         FROM logs-osquery_manager.result-default
         | WHERE action_id == "{{ steps.run_fleet_query.output.data.queries[0].action_id }}"
-        | KEEP host.name, osquery.path, osquery.filename, osquery.directory, action_id, @timestamp
+        | KEEP host.name, osquery.path, action_id, @timestamp
 
   # ==========================================================================
   # STEP 4: Agent Builder — Produce the final report
@@ -124,29 +183,7 @@ steps:
     timeout: 5m
 
   # ==========================================================================
-  # STEP 5: Index the report to Elasticsearch
-  # ==========================================================================
-  - name: index_report
-    type: elasticsearch.request
-    with:
-      method: POST
-      path: "/{{ consts.reports_index }}/_doc"
-      body:
-        "@timestamp": "{{ 'now' | date: '%Y-%m-%dT%H:%M:%SZ' }}"
-        report_type: "defend_alert_triage"
-        alert_id: "{{ event.alerts[0]._id | default: inputs.alerts[0]._id }}"
-        alert_rule: "{{ event.alerts[0]['kibana.alert.rule.name'] | default: inputs.alerts[0]['kibana.alert.rule.name'] }}"
-        source_host: "{{ event.alerts[0].host.name | default: inputs.alerts[0].host.name }}"
-        source_agent_id: "{{ event.alerts[0].agent.id | default: inputs.alerts[0].agent.id }}"
-        vulnerability_analysis: "{{ steps.analyze_alert.output | strip }}"
-        osquery_sql: "{{ steps.generate_osquery.output | remove: '```sql' | remove: '```' | strip }}"
-        fleet_results: ${{ steps.fetch_fleet_results.output.values }}
-        fleet_columns: ${{ steps.fetch_fleet_results.output.columns }}
-        report: "{{ steps.generate_report.output | strip }}"
-        execution_id: "{{ execution.id }}"
-
-  # ==========================================================================
-  # STEP 6: Create an Elastic Security Case from the report
+  # STEP 5: Create an Elastic Security Case from the report
   # ==========================================================================
   - name: create_case
     type: kibana.createCaseDefaultSpace
@@ -159,3 +196,10 @@ steps:
         - automated
         - defend-alert-triage
         - workflow
+      connector:
+        id: none
+        name: none
+        type: .none
+        fields: null
+      settings:
+        syncAlerts: true

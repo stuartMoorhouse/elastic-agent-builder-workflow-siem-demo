@@ -29,6 +29,3 @@ aws_instance_type_redteam = "t3.medium"
 vpc_cidr           = "10.0.0.0/16"
 public_subnet_cidr = "10.0.1.0/24"
 allowed_ssh_cidr   = "YOUR_IP/32"  # Replace with your public IP
-
-# Cases viewer user
-cases_user_password = "changeme"  # Password for ronny_arbetsflode user
