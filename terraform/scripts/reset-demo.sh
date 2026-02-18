@@ -167,40 +167,66 @@ if [ "$SOLR_RESTARTED" = false ]; then
             }
         }" 2>/dev/null | jq -r '.count // 0' 2>/dev/null)
 
-    # Get the Java PID and the agent's start time to detect stale tracking
-    JAVA_PID=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "pgrep -f 'start.jar' 2>/dev/null || echo 0")
-    AGENT_PID=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "pgrep -f 'elastic-agent' -o 2>/dev/null || echo 0")
+    # Get the Java PID and the ENDPOINT SENSOR's start time to detect stale tracking.
+    # ElasticEndpoint.service is the eBPF sensor that owns the process tree cache —
+    # it's separate from elastic-agent.service and must be compared against Java.
+    JAVA_PID=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "pgrep -f 'start.jar' -o 2>/dev/null || echo 0")
+    ENDPOINT_PID=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "pgrep -f 'elastic-endpoint' -o 2>/dev/null || echo 0")
 
-    if [ "$JAVA_PID" != "0" ] && [ "$AGENT_PID" != "0" ]; then
-        # If Java started AFTER the agent, the agent may not track it properly
+    if [ "$JAVA_PID" != "0" ] && [ "$ENDPOINT_PID" != "0" ]; then
+        # If Java started AFTER the endpoint sensor, the sensor's process tree is stale
         JAVA_START=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "stat -c %Y /proc/$JAVA_PID 2>/dev/null || echo 0")
-        AGENT_START=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "stat -c %Y /proc/$AGENT_PID 2>/dev/null || echo 0")
+        ENDPOINT_START=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "stat -c %Y /proc/$ENDPOINT_PID 2>/dev/null || echo 0")
 
-        if [ "$JAVA_START" -gt "$AGENT_START" ] 2>/dev/null; then
-            print_warn "Java (PID $JAVA_PID) started AFTER Elastic Agent — Defend won't track it."
+        if [ "$JAVA_START" -gt "$ENDPOINT_START" ] 2>/dev/null; then
+            print_warn "Java (PID $JAVA_PID) started AFTER ElasticEndpoint (PID $ENDPOINT_PID) — process tree is stale."
             SOLR_RESTARTED=true
         else
-            print_info "Java started before agent — process tree tracking OK."
+            print_info "Java started before endpoint sensor — process tree tracking OK."
         fi
     fi
 fi
 
 if [ "$SOLR_RESTARTED" = true ]; then
-    print_warn "Restarting Elastic Agent to rebuild process tree cache..."
-    ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "sudo systemctl restart elastic-agent" 2>/dev/null || true
+    # ElasticEndpoint.service is a SEPARATE systemd service from elastic-agent.
+    # Restarting elastic-agent does NOT restart the endpoint sensor. The endpoint
+    # sensor owns the eBPF hooks and process tree cache — it must be restarted
+    # directly so it re-scans /proc and learns the new Java PID.
+    # See: https://github.com/elastic/elastic-agent/issues/2318
+    #      https://github.com/elastic/ebpf/issues/155
+    print_warn "Restarting ElasticEndpoint.service to rebuild process tree cache..."
+    ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "sudo systemctl restart ElasticEndpoint.service" 2>/dev/null || true
+
+    # Also restart elastic-agent to keep it in sync with the endpoint
+    print_info "Restarting elastic-agent.service..."
+    ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "sudo systemctl restart elastic-agent.service" 2>/dev/null || true
 
     print_info "Waiting for Elastic Agent + Defend to initialize..."
-    for i in $(seq 1 12); do
+    for i in $(seq 1 24); do
         AGENT_STATUS=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "sudo elastic-agent status 2>&1" || echo "error")
         if echo "$AGENT_STATUS" | grep -q "endpoint" && echo "$AGENT_STATUS" | grep -qi "HEALTHY.*Running"; then
             print_info "Agent and Defend are healthy."
             break
         fi
-        if [ "$i" -eq 12 ]; then
-            print_warn "Agent not fully healthy after 60s — continuing."
+        if [ "$i" -eq 24 ]; then
+            print_warn "Agent not fully healthy after 120s — continuing."
         fi
         sleep 5
     done
+
+    # Verify the endpoint sensor now knows about the Java process
+    print_info "Verifying endpoint sensor tracks Java process..."
+    ENDPOINT_PID=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "pgrep -f 'elastic-endpoint' -o 2>/dev/null || echo 0")
+    JAVA_PID_NOW=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "pgrep -f 'start.jar' -o 2>/dev/null || echo 0")
+    if [ "$ENDPOINT_PID" != "0" ] && [ "$JAVA_PID_NOW" != "0" ]; then
+        EP_START=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "stat -c %Y /proc/$ENDPOINT_PID 2>/dev/null || echo 0")
+        JAVA_START_NOW=$(ssh $SSH_OPTS "$SSH_USER@$SOLR_KB_PUBLIC_IP" "stat -c %Y /proc/$JAVA_PID_NOW 2>/dev/null || echo 0")
+        if [ "$EP_START" -gt "$JAVA_START_NOW" ] 2>/dev/null; then
+            print_info "Endpoint sensor (PID $ENDPOINT_PID) started AFTER Java (PID $JAVA_PID_NOW) — process tree tracking OK."
+        else
+            print_warn "Endpoint sensor started before Java — process tree may still be stale."
+        fi
+    fi
 
     # Wait for process events to start flowing
     print_info "Waiting for process event collection to resume..."

@@ -49,15 +49,28 @@ elastic-agent.service    — PID 16140, started Wed Feb 18 16:59:03 2026 (restar
 Java/Solr                — PID 14960, started Wed Feb 18 16:39:12 2026 (Solr restart)
 ```
 
-## Alternative Strategies (not yet tried)
+## Root Cause
 
-1. **Restart `ElasticEndpoint.service`** — restart the actual endpoint sensor that owns the eBPF hooks and process tree cache. `sudo systemctl restart ElasticEndpoint.service` on the victim VM, wait for it to initialize, then test the attack. Estimated effort: 2 min. Likelihood: HIGH — this is the process that's stale and it hasn't been restarted yet.
+After Solr restarts (new Java PID), Elastic Defend's endpoint sensor fails to attribute
+`process.parent.name: "java"` on shells spawned by the new Java process. The exact internal
+mechanism is unclear — the eBPF hooks (`sched_process_fork`/`sched_process_exec`) should see
+all process events system-wide, so the sensor should observe the new Java starting. The failure
+likely involves the sensor's internal process table or `entity_id` ancestry tracking getting
+into an inconsistent state during process replacement.
 
-2. **Restart both services on the victim** — `sudo systemctl restart ElasticEndpoint.service && sudo systemctl restart elastic-agent` to ensure both the sensor and orchestrator are in sync. Estimated effort: 3 min. Likelihood: HIGH.
+What is confirmed:
+- `ElasticEndpoint.service` is a **separate** systemd service from `elastic-agent.service` —
+  restarting the agent does NOT restart the endpoint sensor
+  ([elastic-agent#2318](https://github.com/elastic/elastic-agent/issues/2318))
+- Restarting `ElasticEndpoint.service` forces a clean re-initialization (including `/proc` re-scan)
+  which fixes the problem
 
-3. **Full VM recreation via `reset-solr-red-vm.sh`** — the existing hard reset that taints and recreates the VM via Terraform. This is known to work (it was the previous approach). Estimated effort: 5 min. Likelihood: CERTAIN — but slow. Could be used as the fallback in the reset script if the soft approach fails.
+**Fix**: Restart `ElasticEndpoint.service` directly, then `elastic-agent` to keep them in sync.
 
-4. **Investigate whether Elastic Defend behavioral protection is blocking/suppressing the event** — check endpoint logs on the VM (`/opt/Elastic/Endpoint/` logs) for evidence that the exploit is being detected and suppressed at the sensor level rather than reported as a process event. Estimated effort: 10 min. Likelihood: MEDIUM — would explain why the event is completely absent rather than just mis-enriched.
+## Fix Applied
+
+Updated `reset-demo.sh` to restart `ElasticEndpoint.service` (then `elastic-agent`) when a stale
+process tree is detected, and verify the endpoint sensor started after Java before proceeding.
 
 ## Files Changed
 
