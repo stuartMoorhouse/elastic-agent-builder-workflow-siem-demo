@@ -15,6 +15,14 @@ Purple team exercise: Log4Shell (CVE-2021-44228) exploitation of Apache Solr, de
 ./terraform/scripts/test-cycle.sh
 ```
 
+### Reset VMs only (prepare a clean environment without running the attack)
+
+```bash
+./terraform/scripts/reset-solr-red-vm.sh
+```
+
+Recreates the solr-kb VM, installs Elastic Agent, and waits for event collection. Prints the attack command to run when you're ready.
+
 ### Run just the attack (against existing Solr VM)
 
 ```bash
