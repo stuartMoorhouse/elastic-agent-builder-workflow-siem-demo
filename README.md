@@ -26,6 +26,50 @@ ATTACKER_PRIV=$(cd terraform && terraform output -raw redteam_private_ip)
 ssh -i $SSH_KEY ubuntu@$ATTACKER "bash /home/ubuntu/scripts/host-scan.sh -t $TARGET -a $ATTACKER_PRIV"
 ```
 
+### Reconnaissance commands (once in the reverse shell)
+
+After the reverse shell connects, you'll be dropped into an interactive session on the target. Try these typical red team recon commands:
+
+```bash
+# Identity and privilege
+id
+whoami
+sudo -l
+
+# Host info
+hostname
+uname -a
+cat /etc/os-release
+
+# Network reconnaissance
+ifconfig
+ip addr
+ss -tlnp
+netstat -rn
+cat /etc/resolv.conf
+cat /etc/hosts
+
+# Process and service enumeration
+ps aux
+ps aux | grep solr
+env
+
+# File system and sensitive data
+pwd
+ls -la /
+ls -la /home
+cat /etc/passwd
+cat /etc/shadow
+find / -name "*.properties" -type f 2>/dev/null
+find / -name "*.xml" -path "*/solr/*" 2>/dev/null
+
+# Credential and secret hunting
+cat /opt/solr/server/etc/jetty.xml
+find / -name "*.pem" -o -name "*.key" 2>/dev/null
+env | grep -i pass
+env | grep -i key
+```
+
 ### Redeploy workflow only (after editing YAML or agents)
 
 ```bash

