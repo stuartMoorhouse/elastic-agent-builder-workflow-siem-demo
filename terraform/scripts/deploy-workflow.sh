@@ -349,6 +349,11 @@ CUSTOM_RESPONSE=$(curl -sk -u "${AUTH}" \
         \"interval\": \"10s\",
         \"from\": \"now-2m\",
         \"tags\": [\"Log4Shell\", \"CVE-2021-44228\", \"SIEM Demo\"],
+        \"alert_suppression\": {
+            \"group_by\": [\"host.name\"],
+            \"duration\": {\"value\": 1, \"unit\": \"h\"},
+            \"missing_fields_strategy\": \"suppress\"
+        },
         \"actions\": ${ACTIONS_JSON},
         \"threat\": [
             {
