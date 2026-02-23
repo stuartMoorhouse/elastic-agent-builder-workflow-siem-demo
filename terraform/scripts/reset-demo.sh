@@ -6,10 +6,11 @@
 # Quickly resets the demo environment WITHOUT recreating VMs:
 #   1. Kills attacker processes (msfconsole, listeners)
 #   2. Kills victim reverse shells (does NOT restart Solr — see note below)
-#   3. Deletes Elastic Security alerts for our detection rule
-#   4. Resets detection rule alert suppression (disable/re-enable)
-#   5. Deletes Elastic Security cases created by the workflow
-#   6. Verifies readiness (Solr up, Agent healthy, events flowing)
+#   3. Disables detection rule (prevents alert re-creation during cleanup)
+#   4. Deletes Elastic Security alerts for our detection rule
+#   5. Re-enables detection rule (resets suppression window)
+#   6. Deletes Elastic Security cases created by the workflow
+#   7. Verifies readiness (Solr up, Agent healthy, events flowing)
 #
 # NOTE: We intentionally do NOT restart Solr. Restarting creates a new Java
 # PID which invalidates Elastic Defend's process tree cache, causing a
@@ -236,12 +237,48 @@ if [ "$SOLR_RESTARTED" = true ]; then
 fi
 
 ################################################################################
-# STEP 4: Delete Elastic Security alerts
+# STEP 4: Disable detection rule (MUST happen before deleting alerts,
+#          otherwise the still-running rule re-fires and recreates them)
 ################################################################################
 
-print_phase "STEP 4: Clearing Elastic Security alerts"
+print_phase "STEP 4: Disabling detection rule"
 
 RULE_NAME="Shell Spawned by Java Process"
+STABLE_RULE_ID="siem-demo-shell-spawned-by-java"
+
+# Find the rule's internal ID
+RULE_INTERNAL_ID=$(curl -s -K "$CURL_AUTH_CONF" \
+    -H "kbn-xsrf: true" \
+    -H "x-elastic-internal-origin: Kibana" \
+    "${KIBANA_URL}/api/detection_engine/rules?rule_id=${STABLE_RULE_ID}" 2>/dev/null \
+    | jq -r '.id // empty' 2>/dev/null)
+
+if [ -n "$RULE_INTERNAL_ID" ]; then
+    print_info "Disabling detection rule '${RULE_NAME}'..."
+    curl -s -K "$CURL_AUTH_CONF" \
+        -X PATCH \
+        -H "kbn-xsrf: true" \
+        -H "x-elastic-internal-origin: Kibana" \
+        -H "Content-Type: application/json" \
+        "${KIBANA_URL}/api/detection_engine/rules" \
+        -d "{\"id\": \"${RULE_INTERNAL_ID}\", \"enabled\": false}" > /dev/null 2>&1
+
+    # Wait for the rule's current execution interval to complete so it can't
+    # sneak in one last batch of alerts after we delete them
+    print_info "Waiting for rule execution interval to drain..."
+    sleep 5
+
+    print_info "Detection rule disabled."
+else
+    print_warn "Detection rule '${STABLE_RULE_ID}' not found — skipping."
+fi
+
+################################################################################
+# STEP 5: Delete Elastic Security alerts (rule is now disabled so they
+#          won't be recreated)
+################################################################################
+
+print_phase "STEP 5: Clearing Elastic Security alerts"
 
 print_info "Deleting alerts for rule '${RULE_NAME}'..."
 DELETE_RESPONSE=$(curl -s -K "$CURL_AUTH_CONF" \
@@ -254,40 +291,52 @@ DELETE_RESPONSE=$(curl -s -K "$CURL_AUTH_CONF" \
                 \"kibana.alert.rule.name\": \"${RULE_NAME}\"
             }
         }
-    }" 2>/dev/null)
+    }" 2>&1)
 
 DELETED=$(echo "$DELETE_RESPONSE" | jq -r '.deleted // 0' 2>/dev/null)
-print_info "Deleted ${DELETED} alert(s)."
+FAILURES=$(echo "$DELETE_RESPONSE" | jq -r '.failures | length // 0' 2>/dev/null)
 
-################################################################################
-# STEP 5: Reset detection rule (clear alert suppression state)
-################################################################################
+if [ "$DELETED" -gt 0 ] 2>/dev/null; then
+    print_info "Deleted ${DELETED} alert(s)."
+elif echo "$DELETE_RESPONSE" | jq -e '.error' > /dev/null 2>&1; then
+    # If direct ES access is blocked (system index restriction), fall back to
+    # the Kibana alerting API to close alerts instead of deleting them.
+    ES_ERROR=$(echo "$DELETE_RESPONSE" | jq -r '.error.type // .error.reason // "unknown"' 2>/dev/null)
+    print_warn "Direct delete failed (${ES_ERROR}). Closing alerts via Kibana API..."
 
-print_phase "STEP 5: Resetting detection rule suppression"
-
-STABLE_RULE_ID="siem-demo-shell-spawned-by-java"
-
-# Find the rule's internal ID
-RULE_INTERNAL_ID=$(curl -s -K "$CURL_AUTH_CONF" \
-    -H "kbn-xsrf: true" \
-    -H "x-elastic-internal-origin: Kibana" \
-    "${KIBANA_URL}/api/detection_engine/rules?rule_id=${STABLE_RULE_ID}" 2>/dev/null \
-    | jq -r '.id // empty' 2>/dev/null)
-
-if [ -n "$RULE_INTERNAL_ID" ]; then
-    # Disable the rule
-    print_info "Disabling detection rule..."
     curl -s -K "$CURL_AUTH_CONF" \
-        -X PATCH \
+        -X POST \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
         -H "Content-Type: application/json" \
-        "${KIBANA_URL}/api/detection_engine/rules" \
-        -d "{\"id\": \"${RULE_INTERNAL_ID}\", \"enabled\": false}" > /dev/null 2>&1
+        "${KIBANA_URL}/api/detection_engine/signals/status" \
+        -d "{
+            \"query\": {
+                \"bool\": {
+                    \"filter\": [
+                        {\"term\": {\"kibana.alert.rule.name\": \"${RULE_NAME}\"}}
+                    ]
+                }
+            },
+            \"status\": \"closed\"
+        }" > /dev/null 2>&1
 
-    sleep 2
+    print_info "Alerts closed via Kibana API."
+else
+    print_info "No alerts found to delete."
+fi
 
-    # Re-enable the rule (resets suppression window)
+if [ "$FAILURES" -gt 0 ] 2>/dev/null; then
+    print_warn "${FAILURES} alert(s) failed to delete — check index permissions."
+fi
+
+################################################################################
+# STEP 6: Re-enable detection rule (resets alert suppression window)
+################################################################################
+
+print_phase "STEP 6: Re-enabling detection rule"
+
+if [ -n "$RULE_INTERNAL_ID" ]; then
     print_info "Re-enabling detection rule..."
     curl -s -K "$CURL_AUTH_CONF" \
         -X PATCH \
@@ -297,16 +346,16 @@ if [ -n "$RULE_INTERNAL_ID" ]; then
         "${KIBANA_URL}/api/detection_engine/rules" \
         -d "{\"id\": \"${RULE_INTERNAL_ID}\", \"enabled\": true}" > /dev/null 2>&1
 
-    print_info "Detection rule reset."
+    print_info "Detection rule re-enabled (suppression window reset)."
 else
-    print_warn "Detection rule '${STABLE_RULE_ID}' not found — skipping."
+    print_warn "No rule to re-enable — skipping."
 fi
 
 ################################################################################
-# STEP 6: Delete Elastic Security cases
+# STEP 7: Delete Elastic Security cases
 ################################################################################
 
-print_phase "STEP 6: Clearing Elastic Security cases"
+print_phase "STEP 7: Clearing Elastic Security cases"
 
 CASE_IDS=$(curl -s -K "$CURL_AUTH_CONF" \
     -H "kbn-xsrf: true" \
@@ -337,10 +386,10 @@ else
 fi
 
 ################################################################################
-# STEP 7: Verify readiness
+# STEP 8: Verify readiness
 ################################################################################
 
-print_phase "STEP 7: Verifying readiness"
+print_phase "STEP 8: Verifying readiness"
 
 # Check Elastic Agent is healthy
 print_info "Checking Elastic Agent status on solr-kb..."

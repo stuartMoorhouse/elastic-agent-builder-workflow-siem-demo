@@ -79,11 +79,10 @@ You'll be dropped into an interactive Metasploit session on the victim.
 
 ## Resetting the Demo
 
-To run the demo again without rebuilding VMs:
+To run the demo again without rebuilding VMs (from the same `terraform/` directory):
 
 ```bash
-# From the project root (not the red team VM)
-./terraform/scripts/reset-demo.sh
+./scripts/reset-demo.sh
 ```
 
 This kills attacker/victim processes, clears alerts and cases, resets detection rule suppression, and verifies agent health. It prints the attack command to run when ready.
