@@ -1,6 +1,6 @@
 # Log4Shell SIEM Demo
 
-Purple team demo: Log4Shell (CVE-2021-44228) exploitation of Apache Solr, detected by Elastic Defend, triaged automatically by an Elastic Workflow with AI agents.
+Purple team demo: Log4Shell ([CVE-2021-44228](https://nvd.nist.gov/vuln/detail/CVE-2021-44228)) exploitation of Apache Solr, detected by Elastic Defend, triaged automatically by an Elastic Workflow with AI agents.
 
 ## Prerequisites
 
@@ -9,7 +9,6 @@ Purple team demo: Log4Shell (CVE-2021-44228) exploitation of Apache Solr, detect
 - AWS credentials as environment variables:
   - `AWS_ACCESS_KEY_ID`
   - `AWS_SECRET_ACCESS_KEY`
-  - `AWS_SESSION_TOKEN`
 - An Elastic Cloud API key (set via `EC_API_KEY` or in your Terraform variables)
 
 ### Environment Variables
@@ -32,7 +31,7 @@ terraform init
 terraform apply
 ```
 
-This takes ~10 minutes. Terraform provisions:
+Terraform provisions:
 - An Elastic Cloud deployment (Elasticsearch, Kibana, Fleet, ML node)
 - 3 Ubuntu VMs running Apache Solr (all vulnerable — Solr 8.11.0 / JDK 8u181) with Elastic Agent + Defend
 - 1 red team VM with Metasploit, nmap, and nuclei
@@ -74,30 +73,13 @@ From the red team VM:
 ```bash
 # Full recon + exploit (scans subnet, finds Solr, exploits Log4Shell)
 ./scripts/host-scan.sh -s 10.0.1.0/24 -a $(hostname -I | awk '{print $1}')
-
-# Or skip recon and target solr-kb directly
-./scripts/host-scan.sh -t <SOLR_KB_PRIVATE_IP> -a $(hostname -I | awk '{print $1}')
 ```
 
 The script runs through: nmap discovery, Solr version fingerprinting, Log4Shell confirmation, Metasploit exploitation, and reverse shell.
 
 You'll be dropped into an interactive Metasploit session on the victim.
 
-### 3. Red team commands (in the reverse shell)
-
-Once the reverse shell connects, run recon commands to generate Elastic Defend alerts:
-
-```bash
-whoami                          # solr — the service account
-hostname                        # solr-kb
-cat /etc/shadow                 # credential access (triggers alert)
-sudo -l                         # privilege escalation check
-find / -name "*.pem" 2>/dev/null  # secret hunting
-ps aux | grep solr              # process enumeration
-cat /opt/solr/server/etc/jetty.xml  # config file access
-```
-
-### 4. Observe in Kibana
+### 3. Observe in Kibana
 
 - **Security → Alerts** — Defend alerts appear for the reverse shell, `/etc/shadow` read, etc.
 - **Stack Management → Workflows** — The alert-triage workflow triggers automatically:
@@ -110,7 +92,7 @@ cat /opt/solr/server/etc/jetty.xml  # config file access
 
 ## Resetting the Demo
 
-To run the demo again without rebuilding VMs (~30 seconds):
+To run the demo again without rebuilding VMs:
 
 ```bash
 # From the project root (not the red team VM)
@@ -125,38 +107,38 @@ This kills attacker/victim processes, clears alerts and cases, resets detection 
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  AWS VPC — 10.0.1.0/24 (eu-north-1)                                │
+│  AWS VPC — 10.0.1.0/24 (eu-north-1)                                 │
 │                                                                     │
 │  ┌──────────────┐    exploit     ┌──────────────────────────────┐   │
 │  │  Red Team VM  │──────────────→│  solr-kb      (VULNERABLE)   │   │
-│  │  Metasploit   │  reverse shell│  Solr 8.11.0 / JDK 8u181    │   │
+│  │  Metasploit   │  reverse shell│  Solr 8.11.0 / JDK 8u181     │   │
 │  │  nmap, nuclei │←──────────────│  Elastic Agent + Defend      │   │
 │  └──────────────┘                └──────────────────────────────┘   │
 │         │                        ┌──────────────────────────────┐   │
 │         │  (same vulnerability)  │  solr-support  (VULNERABLE)  │   │
-│         └───────────────────────→│  Solr 8.11.0 / JDK 8u181    │   │
-│                                  │  Elastic Agent + Defend      │   │
-│                                  └──────────────────────────────┘   │
-│                                  ┌──────────────────────────────┐   │
-│                                  │  solr-catalog  (VULNERABLE)  │   │
-│                                  │  Solr 8.11.0 / JDK 8u181    │   │
+│         └───────────────────────→│  Solr 8.11.0 / JDK 8u181     │   │
+│         |                        │  Elastic Agent + Defend      │   │
+│         |                        └──────────────────────────────┘   │
+│         |                        ┌──────────────────────────────┐   │
+│         |                        │  solr-catalog  (VULNERABLE)  │   │
+│         └───────────────────────→|  Solr 8.11.0 / JDK 8u181     │   │
 │                                  │  Elastic Agent + Defend      │   │
 │                                  └──────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
-          │ alerts                           │ agent telemetry
-          ▼                                  ▼
+                                    │ agent telemetry
+                                    ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │  Elastic Cloud (gcp-us-central1)                                    │
 │                                                                     │
-│  Elasticsearch ← Fleet Server ← Elastic Agents                     │
+│  Elasticsearch ← Fleet Server ← Elastic Agents                      │
 │       │                                                             │
 │       ▼                                                             │
 │  Detection Rule: "Shell Spawned by Java Process"                    │
 │       │                                                             │
 │       ▼                                                             │
-│  Workflow: Alert Triage                                              │
+│  Workflow: Alert Triage                                             │
 │    1. AI agent analyzes alert → identifies Log4Shell                │
-│    2. Generates osquery → scans fleet for vulnerable Log4j JARs    │
+│    2. Generates osquery → scans fleet for vulnerable Log4j JARs     │
 │    3. Indexes incident report → siem-demo-reports                   │
 └─────────────────────────────────────────────────────────────────────┘
 ```
