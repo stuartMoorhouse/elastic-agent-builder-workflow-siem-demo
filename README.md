@@ -14,10 +14,7 @@ Purple team demo: Log4Shell ([CVE-2021-44228](https://nvd.nist.gov/vuln/detail/C
 ### Environment Variables
 
 ```bash
-# Required — your public IP for SSH access (CIDR notation)
-export TF_VAR_allowed_ssh_cidr="<YOUR_IP>/32"
-
-# Optional — override defaults
+# Optional — override defaults (SSH is auto-locked to your current public IP)
 export TF_VAR_aws_region="eu-north-1"           # default
 export TF_VAR_region="gcp-us-central1"           # Elastic Cloud region, default
 export TF_VAR_deployment_name="workflow-demo"     # default

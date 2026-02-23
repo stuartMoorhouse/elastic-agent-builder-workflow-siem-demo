@@ -103,8 +103,9 @@ variable "public_subnet_cidr" {
 }
 
 variable "allowed_ssh_cidr" {
-  description = "CIDR block allowed to SSH into instances (e.g. your IP/32)"
+  description = "CIDR block allowed to SSH into instances. Auto-detected from your public IP if not set."
   type        = string
+  default     = ""
 
   validation {
     condition     = var.allowed_ssh_cidr != "0.0.0.0/0"

@@ -26,7 +26,7 @@ resource "aws_vpc_security_group_ingress_rule" "host_ssh" {
   ip_protocol       = "tcp"
   from_port         = 22
   to_port           = 22
-  cidr_ipv4         = var.allowed_ssh_cidr
+  cidr_ipv4         = local.allowed_ssh_cidr
 }
 
 resource "aws_vpc_security_group_ingress_rule" "host_from_redteam" {
@@ -58,7 +58,7 @@ resource "aws_vpc_security_group_ingress_rule" "redteam_ssh" {
   ip_protocol       = "tcp"
   from_port         = 22
   to_port           = 22
-  cidr_ipv4         = var.allowed_ssh_cidr
+  cidr_ipv4         = local.allowed_ssh_cidr
 }
 
 resource "aws_vpc_security_group_ingress_rule" "redteam_from_hosts" {
