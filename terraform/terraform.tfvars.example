@@ -28,4 +28,4 @@ aws_instance_type_redteam = "t3.large"
 # AWS Networking
 vpc_cidr           = "10.0.0.0/16"
 public_subnet_cidr = "10.0.1.0/24"
-allowed_ssh_cidr   = "YOUR_IP/32"  # Replace with your public IP
+# allowed_ssh_cidr = "YOUR_IP/32"  # Optional — auto-detected from your public IP if not set

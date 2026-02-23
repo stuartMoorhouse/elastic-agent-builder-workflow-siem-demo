@@ -27,10 +27,15 @@ cd terraform
 terraform init
 ```
 
-If you use a named AWS CLI profile (instead of environment variables or the default profile), create a `terraform.tfvars` file:
+**Optional `terraform.tfvars`** — create this file to override defaults:
 
 ```hcl
+# If you use a named AWS CLI profile (omit to use default credential chain)
 aws_profile = "your-profile-name"
+
+# SSH access is auto-locked to your current public IP.
+# Override only if auto-detection doesn't work (e.g. behind a VPN):
+allowed_ssh_cidr = "203.0.113.10/32"
 ```
 
 Then apply:
