@@ -105,4 +105,9 @@ variable "public_subnet_cidr" {
 variable "allowed_ssh_cidr" {
   description = "CIDR block allowed to SSH into instances (e.g. your IP/32)"
   type        = string
+
+  validation {
+    condition     = var.allowed_ssh_cidr != "0.0.0.0/0"
+    error_message = "SSH must not be open to the world (0.0.0.0/0). Use your public IP with a /32 mask."
+  }
 }

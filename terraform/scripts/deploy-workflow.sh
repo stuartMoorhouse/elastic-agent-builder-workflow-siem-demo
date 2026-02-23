@@ -20,21 +20,9 @@
 
 set -e
 
-# Color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-common.sh"
+trap 'cleanup_curl_auth' EXIT
 
-print_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_step()  { echo -e "${BLUE}[STEP]${NC} $1"; }
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERRAFORM_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
 WORKFLOWS_DIR="${TERRAFORM_DIR}/workflows"
 
 ALERT_ANALYZER_DEF="${WORKFLOWS_DIR}/agents/alert-analyzer.json"
@@ -54,21 +42,14 @@ echo ""
 
 print_step "Reading Terraform outputs..."
 
-cd "$TERRAFORM_DIR"
-
-KIBANA_URL=$(terraform output -raw kibana_endpoint)
-ES_URL=$(terraform output -raw elasticsearch_endpoint)
-ES_USER=$(terraform output -raw elasticsearch_username)
-ES_PASS=$(terraform output -raw elasticsearch_password)
-
-AUTH="${ES_USER}:${ES_PASS}"
+read_terraform_outputs
 
 print_info "Kibana URL: ${KIBANA_URL}"
 print_info "ES URL:     ${ES_URL}"
 echo ""
 
 # Verify connectivity
-HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -u "${AUTH}" "${KIBANA_URL}/api/status" 2>/dev/null)
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -K "$CURL_AUTH_CONF" "${KIBANA_URL}/api/status" 2>/dev/null)
 if [[ "$HTTP_CODE" != "200" ]]; then
     print_error "Cannot reach Kibana (HTTP ${HTTP_CODE}). Is the deployment running?"
     exit 1
@@ -90,7 +71,7 @@ if [[ -f "$WORKFLOW_ID_FILE" ]]; then
     OLD_WORKFLOW_ID=$(cat "$WORKFLOW_ID_FILE" | tr -d '[:space:]')
     if [[ -n "$OLD_WORKFLOW_ID" ]]; then
         print_info "Deleting old workflow ${OLD_WORKFLOW_ID}..."
-        HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -u "${AUTH}" \
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -K "$CURL_AUTH_CONF" \
             -X DELETE \
             -H "kbn-xsrf: true" \
             -H "x-elastic-internal-origin: Kibana" \
@@ -106,13 +87,13 @@ fi
 
 # Delete existing agents
 for aid in "${AGENT_IDS[@]}"; do
-    HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" -u "${AUTH}" \
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -K "$CURL_AUTH_CONF" \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
         "${KIBANA_URL}/api/agent_builder/agents/${aid}" 2>/dev/null)
     if [[ "$HTTP_CODE" == "200" ]]; then
         print_info "Deleting agent '${aid}'..."
-        curl -sk -u "${AUTH}" \
+        curl -s -K "$CURL_AUTH_CONF" \
             -X DELETE \
             -H "kbn-xsrf: true" \
             -H "x-elastic-internal-origin: Kibana" \
@@ -140,7 +121,7 @@ create_agent() {
 
     print_info "Creating agent '${agent_name}'..."
     local response
-    response=$(curl -sk -u "${AUTH}" \
+    response=$(curl -s -K "$CURL_AUTH_CONF" \
         -X POST \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
@@ -190,20 +171,20 @@ echo ""
 print_step "[3/7] Looking up inference connector..."
 
 # Find an inference connector (type: inference.completion_stream or .inference)
-CONNECTOR_ID=$(curl -sk -u "${AUTH}" \
+CONNECTOR_ID=$(curl -s -K "$CURL_AUTH_CONF" \
     -H "kbn-xsrf: true" \
     "${KIBANA_URL}/api/actions/connectors" 2>/dev/null \
     | jq -r '[.[] | select(.connector_type_id == ".inference" or .connector_type_id == "inference.completion_stream")] | first | .id // empty' 2>/dev/null || echo "")
 
 if [[ -n "$CONNECTOR_ID" ]]; then
-    CONNECTOR_NAME=$(curl -sk -u "${AUTH}" \
+    CONNECTOR_NAME=$(curl -s -K "$CURL_AUTH_CONF" \
         -H "kbn-xsrf: true" \
         "${KIBANA_URL}/api/actions/connectors" 2>/dev/null \
         | jq -r ".[] | select(.id == \"${CONNECTOR_ID}\") | .name" 2>/dev/null || echo "unknown")
     print_info "Found inference connector '${CONNECTOR_NAME}' (ID: ${CONNECTOR_ID})"
 else
     print_warn "No inference connector found. Available connector types:"
-    curl -sk -u "${AUTH}" \
+    curl -s -K "$CURL_AUTH_CONF" \
         -H "kbn-xsrf: true" \
         "${KIBANA_URL}/api/actions/connectors" 2>/dev/null \
         | jq -r '.[].connector_type_id' 2>/dev/null | sort -u | head -20
@@ -219,7 +200,7 @@ echo ""
 print_step "[4/7] Looking up Fleet agent policy..."
 
 POLICY_NAME="SIEM Demo - Endpoint Security"
-POLICY_ID=$(curl -sk -u "${AUTH}" \
+POLICY_ID=$(curl -s -K "$CURL_AUTH_CONF" \
     -H "kbn-xsrf: true" \
     "${KIBANA_URL}/api/fleet/agent_policies" 2>/dev/null \
     | jq -r ".items[]? | select(.name == \"${POLICY_NAME}\") | .id" 2>/dev/null || echo "")
@@ -252,7 +233,7 @@ WORKFLOW_YAML=$(cat "$WORKFLOW_DEF" \
 
 # Import via API — the YAML is sent as a JSON-escaped string
 WORKFLOW_RESPONSE=$(echo "$WORKFLOW_YAML" | jq -Rs '{yaml: .}' | \
-    curl -sk -u "${AUTH}" \
+    curl -s -K "$CURL_AUTH_CONF" \
         -X POST \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
@@ -288,7 +269,7 @@ CUSTOM_RULE_NAME="Shell Spawned by Java Process"
 STABLE_RULE_ID="siem-demo-shell-spawned-by-java"
 
 # Delete ALL existing rules with this name (cleans up duplicates from prior deploys)
-EXISTING_IDS=$(curl -sk -u "${AUTH}" \
+EXISTING_IDS=$(curl -s -K "$CURL_AUTH_CONF" \
     -H "kbn-xsrf: true" \
     -H "x-elastic-internal-origin: Kibana" \
     "${KIBANA_URL}/api/detection_engine/rules/_find?per_page=100" 2>/dev/null \
@@ -296,7 +277,7 @@ EXISTING_IDS=$(curl -sk -u "${AUTH}" \
 
 for OLD_ID in $EXISTING_IDS; do
     print_info "Deleting old rule ${OLD_ID}..."
-    curl -sk -u "${AUTH}" \
+    curl -s -K "$CURL_AUTH_CONF" \
         -X DELETE \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
@@ -304,7 +285,7 @@ for OLD_ID in $EXISTING_IDS; do
 done
 
 # Also delete by our stable rule_id in case name was changed
-curl -sk -u "${AUTH}" \
+curl -s -K "$CURL_AUTH_CONF" \
     -X DELETE \
     -H "kbn-xsrf: true" \
     -H "x-elastic-internal-origin: Kibana" \
@@ -329,7 +310,7 @@ fi
 
 # Create rule with stable rule_id and workflow action attached in one shot
 print_info "Creating rule '${CUSTOM_RULE_NAME}' with workflow action..."
-CUSTOM_RESPONSE=$(curl -sk -u "${AUTH}" \
+CUSTOM_RESPONSE=$(curl -s -K "$CURL_AUTH_CONF" \
     -X POST \
     -H "kbn-xsrf: true" \
     -H "x-elastic-internal-origin: Kibana" \

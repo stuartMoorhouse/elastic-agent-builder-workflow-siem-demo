@@ -11,18 +11,9 @@
 
 set -e
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-common.sh"
+trap 'cleanup_curl_auth' EXIT
 
-print_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERRAFORM_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
 STATE_DIR="${PROJECT_DIR}/state"
 WORKFLOW_ID_FILE="${STATE_DIR}/workflow-id"
 
@@ -31,7 +22,7 @@ cd "$TERRAFORM_DIR"
 KIBANA_URL=$(terraform output -raw kibana_endpoint)
 ES_USER=$(terraform output -raw elasticsearch_username)
 ES_PASS=$(terraform output -raw elasticsearch_password)
-AUTH="${ES_USER}:${ES_PASS}"
+setup_curl_auth "$ES_USER" "$ES_PASS"
 
 echo "=========================================="
 echo "Teardown — Workflows and Cases"
@@ -48,7 +39,7 @@ if [[ -f "$WORKFLOW_ID_FILE" ]]; then
     SAVED_ID=$(cat "$WORKFLOW_ID_FILE")
     if [[ -n "$SAVED_ID" ]]; then
         print_info "Deleting workflow ${SAVED_ID} (from state file)..."
-        HTTP_CODE=$(curl -sk -u "${AUTH}" \
+        HTTP_CODE=$(curl -s -K "$CURL_AUTH_CONF" \
             -X DELETE \
             -H "kbn-xsrf: true" \
             -H "x-elastic-internal-origin: Kibana" \
@@ -68,7 +59,7 @@ fi
 # Delete any extra workflows passed as arguments
 for wid in "$@"; do
     print_info "Deleting workflow ${wid}..."
-    HTTP_CODE=$(curl -sk -u "${AUTH}" \
+    HTTP_CODE=$(curl -s -K "$CURL_AUTH_CONF" \
         -X DELETE \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
@@ -89,7 +80,7 @@ echo ""
 # --------------------------------------------------------------------------
 print_info "Searching for cases..."
 
-CASE_IDS=$(curl -sk -u "${AUTH}" \
+CASE_IDS=$(curl -s -K "$CURL_AUTH_CONF" \
     -H "kbn-xsrf: true" \
     -H "x-elastic-internal-origin: Kibana" \
     "${KIBANA_URL}/api/cases/_find?perPage=100" 2>/dev/null \
@@ -105,7 +96,7 @@ else
     COUNT=$(echo "$CASE_IDS" | wc -l | tr -d ' ')
     print_info "Deleting ${COUNT} case(s)..."
 
-    HTTP_CODE=$(curl -sk -u "${AUTH}" \
+    HTTP_CODE=$(curl -s -K "$CURL_AUTH_CONF" \
         -X DELETE \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \

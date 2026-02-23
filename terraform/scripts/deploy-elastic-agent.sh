@@ -19,21 +19,8 @@
 
 set -e
 
-# Color codes
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
-
-print_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_step()  { echo -e "${BLUE}[STEP]${NC} $1"; }
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERRAFORM_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-common.sh"
+trap 'cleanup_curl_auth' EXIT
 
 ################################################################################
 # READ TERRAFORM OUTPUTS
@@ -54,8 +41,6 @@ ELASTIC_PASSWORD=$(terraform output -raw elasticsearch_password)
 ELASTICSEARCH_URL=$(terraform output -raw elasticsearch_endpoint)
 ELASTIC_VERSION=$(terraform output -raw deployment_version)
 DEPLOYMENT_ID=$(terraform output -raw deployment_id)
-SSH_KEY="${PROJECT_DIR}/state/ssh-key.pem"
-SSH_USER="ubuntu"
 POLICY_NAME="SIEM Demo - Endpoint Security"
 
 # Get host IPs as JSON, then extract
@@ -66,10 +51,12 @@ HOST_COUNT=$(echo "$HOST_PUBLIC_IPS_JSON" | jq 'length')
 
 cd "$PROJECT_DIR"
 
+setup_curl_auth "$ELASTIC_USER" "$ELASTIC_PASSWORD"
+
 # Get Fleet Server URL from Kibana API (not from terraform - the integrations_server
 # endpoint is the APM server, not Fleet Server)
 print_info "Fetching Fleet Server URL from Kibana..."
-FLEET_URL=$(curl -s --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+FLEET_URL=$(curl -s -K "$CURL_AUTH_CONF" \
   --header "kbn-xsrf: true" \
   "${KIBANA_URL}/api/fleet/fleet_server_hosts" \
   | jq -r '.items[] | select(.is_default==true) | .host_urls[0]')
@@ -101,7 +88,7 @@ print_step "[1/5] Creating agent policy..."
 # Check if policy already exists
 EXISTING_POLICIES=$(curl -s --request GET \
   --url "${KIBANA_URL}/api/fleet/agent_policies" \
-  --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+  -K "$CURL_AUTH_CONF" \
   --header "kbn-xsrf: true")
 
 POLICY_ID=$(echo "$EXISTING_POLICIES" | jq -r ".items[] | select(.name==\"${POLICY_NAME}\") | .id")
@@ -111,7 +98,7 @@ if [ -n "$POLICY_ID" ] && [ "$POLICY_ID" != "null" ]; then
 else
     POLICY_RESPONSE=$(curl -s --request POST \
       --url "${KIBANA_URL}/api/fleet/agent_policies?sys_monitoring=true" \
-      --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+      -K "$CURL_AUTH_CONF" \
       --header "Content-Type: application/json" \
       --header "kbn-xsrf: true" \
       --data '{
@@ -143,7 +130,7 @@ print_step "[2/5] Adding Elastic Defend integration..."
 # Check if Defend is already on this policy
 EXISTING_PACKAGES=$(curl -s --request GET \
   --url "${KIBANA_URL}/api/fleet/package_policies?perPage=100" \
-  --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+  -K "$CURL_AUTH_CONF" \
   --header "kbn-xsrf: true")
 
 DEFEND_EXISTS=$(echo "$EXISTING_PACKAGES" | jq -r ".items[] | select(.policy_id==\"${POLICY_ID}\" and .package.name==\"endpoint\") | .id")
@@ -158,7 +145,7 @@ else
     print_info "  [a] Creating Elastic Defend with EDRComplete preset..."
     DEFEND_RESPONSE=$(curl -s --request POST \
       --url "${KIBANA_URL}/api/fleet/package_policies" \
-      --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+      -K "$CURL_AUTH_CONF" \
       --header "Content-Type: application/json" \
       --header "kbn-xsrf: true" \
       --header "kbn-version: ${ELASTIC_VERSION}" \
@@ -206,7 +193,7 @@ else
     print_info "  [b] Retrieving current Defend configuration..."
     CURRENT_CONFIG=$(curl -s --request GET \
       --url "${KIBANA_URL}/api/fleet/package_policies/${PACKAGE_POLICY_ID}" \
-      --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+      -K "$CURL_AUTH_CONF" \
       --header "kbn-xsrf: true" \
       --header "kbn-version: ${ELASTIC_VERSION}")
 
@@ -214,7 +201,7 @@ else
     print_info "  [c] Updating to detect mode with full event collection..."
     UPDATE_RESPONSE=$(curl -s --request PUT \
       --url "${KIBANA_URL}/api/fleet/package_policies/${PACKAGE_POLICY_ID}" \
-      --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+      -K "$CURL_AUTH_CONF" \
       --header "Content-Type: application/json" \
       --header "kbn-xsrf: true" \
       --header "kbn-version: ${ELASTIC_VERSION}" \
@@ -306,7 +293,7 @@ else
     print_info "  Fetching osquery_manager package info..."
     OSQUERY_PACKAGE_INFO=$(curl -s --request GET \
       --url "${KIBANA_URL}/api/fleet/epm/packages/osquery_manager" \
-      --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+      -K "$CURL_AUTH_CONF" \
       --header "kbn-xsrf: true")
 
     OSQUERY_VERSION=$(echo "$OSQUERY_PACKAGE_INFO" | jq -r '.item.version // .response.version // "1.12.1"')
@@ -318,7 +305,7 @@ else
         print_info "  Installing osquery_manager package..."
         curl -s --request POST \
           --url "${KIBANA_URL}/api/fleet/epm/packages/osquery_manager/${OSQUERY_VERSION}" \
-          --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+          -K "$CURL_AUTH_CONF" \
           --header "Content-Type: application/json" \
           --header "kbn-xsrf: true" \
           --data '{}' > /dev/null
@@ -329,7 +316,7 @@ else
     print_info "  Creating osquery Manager integration..."
     OSQUERY_RESPONSE=$(curl -s --request POST \
       --url "${KIBANA_URL}/api/fleet/package_policies" \
-      --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+      -K "$CURL_AUTH_CONF" \
       --header "Content-Type: application/json" \
       --header "kbn-xsrf: true" \
       --data '{
@@ -374,7 +361,7 @@ sleep 2
 
 ENROLLMENT_RESPONSE=$(curl -s --request GET \
   --url "${KIBANA_URL}/api/fleet/enrollment_api_keys" \
-  --user "${ELASTIC_USER}:${ELASTIC_PASSWORD}" \
+  -K "$CURL_AUTH_CONF" \
   --header "kbn-xsrf: true")
 
 ENROLLMENT_TOKEN=$(echo "$ENROLLMENT_RESPONSE" | jq -r ".items[] | select(.policy_id==\"${POLICY_ID}\") | .api_key")
@@ -394,8 +381,6 @@ echo ""
 
 print_step "[5/5] Deploying Elastic Agent to ${HOST_COUNT} host VMs..."
 echo ""
-
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
 
 for HOST_KEY in $(echo "$HOST_PUBLIC_IPS_JSON" | jq -r 'keys[]'); do
     HOST_IP=$(echo "$HOST_PUBLIC_IPS_JSON" | jq -r ".[\"${HOST_KEY}\"]")

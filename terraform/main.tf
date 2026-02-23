@@ -46,25 +46,31 @@ resource "terraform_data" "kibana_default_space_security" {
 
   provisioner "local-exec" {
     command = <<-EOT
+      # Write credentials to temp file (keeps them out of process table)
+      CURL_AUTH=$(mktemp) && chmod 600 "$CURL_AUTH"
+      printf 'user = "%s:%s"\n' "${self.input.username}" "${self.input.password}" > "$CURL_AUTH"
+
       curl -s -X PUT \
         "${self.input.kibana_endpoint}/api/spaces/space/default" \
         -H "kbn-xsrf: true" \
         -H "Content-Type: application/json" \
-        -u "${self.input.username}:${self.input.password}" \
+        -K "$CURL_AUTH" \
         -d '{"id":"default","name":"Default","description":"This is your default space!","solution":"security"}'
 
       # Enable Elastic Workflows UI (the /api/kibana/settings endpoint is blocked
       # in Security solution view, so we set it via the config saved object directly)
       KIBANA_VERSION=$(curl -s "${self.input.kibana_endpoint}/api/status" \
-        -u "${self.input.username}:${self.input.password}" | \
+        -K "$CURL_AUTH" | \
         python3 -c "import sys,json; print(json.load(sys.stdin)['version']['number'])")
 
       curl -s -X PUT \
         "${self.input.kibana_endpoint}/api/saved_objects/config/$${KIBANA_VERSION}" \
         -H "kbn-xsrf: true" \
         -H "Content-Type: application/json" \
-        -u "${self.input.username}:${self.input.password}" \
+        -K "$CURL_AUTH" \
         -d '{"attributes":{"workflows:ui:enabled":true}}'
+
+      rm -f "$CURL_AUTH"
     EOT
   }
 }

@@ -253,7 +253,7 @@ if [[ "$SKIP_RECON" == "false" ]]; then
         show_cmd "curl -s http://${host}:8983/solr/admin/info/system | python3 -c \"import sys,json; d=json.load(sys.stdin); print(f'Solr: {d[\\\"lucene\\\"][\\\"solr-spec-version\\\"]}, Java: {d[\\\"jvm\\\"][\\\"version\\\"]}')\"" 1
 
         # Capture values for internal tracking
-        SOLR_INFO=$(curl -sk --connect-timeout 5 "http://${host}:8983/solr/admin/info/system" 2>/dev/null || echo "")
+        SOLR_INFO=$(curl -s --connect-timeout 5 "http://${host}:8983/solr/admin/info/system" 2>/dev/null || echo "")
         if [[ -n "$SOLR_INFO" ]]; then
             SOLR_VER=$(echo "$SOLR_INFO" | python3 -c "
 import sys,json

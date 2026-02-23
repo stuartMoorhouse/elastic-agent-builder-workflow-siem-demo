@@ -27,25 +27,8 @@
 
 set -e
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-NC='\033[0m'
-
-print_info()  { echo -e "${GREEN}[INFO]${NC} $1"; }
-print_warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_step()  { echo -e "${BLUE}[STEP]${NC} $1"; }
-print_phase() { echo -e "\n${PURPLE}========================================${NC}"; echo -e "${PURPLE} $1${NC}"; echo -e "${PURPLE}========================================${NC}\n"; }
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TERRAFORM_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
-SSH_KEY="${PROJECT_DIR}/state/ssh-key.pem"
-SSH_USER="ubuntu"
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-common.sh"
+trap 'cleanup_curl_auth' EXIT
 
 cd "$TERRAFORM_DIR"
 
@@ -59,7 +42,7 @@ KIBANA_URL=$(terraform output -raw kibana_endpoint)
 ES_URL=$(terraform output -raw elasticsearch_endpoint)
 ES_USER=$(terraform output -raw elasticsearch_username)
 ES_PASS=$(terraform output -raw elasticsearch_password)
-AUTH="${ES_USER}:${ES_PASS}"
+setup_curl_auth "$ES_USER" "$ES_PASS"
 
 REDTEAM_PUBLIC_IP=$(terraform output -raw redteam_public_ip)
 REDTEAM_PRIVATE_IP=$(terraform output -raw redteam_private_ip)
@@ -151,7 +134,7 @@ fi
 # Detect this by checking if recent java-parented process events exist.
 if [ "$SOLR_RESTARTED" = false ]; then
     print_info "Checking Defend can see Java process tree..."
-    JAVA_EVENTS=$(curl -sk -u "${AUTH}" \
+    JAVA_EVENTS=$(curl -s -K "$CURL_AUTH_CONF" \
         -H "Content-Type: application/json" \
         "${ES_URL}/logs-endpoint.events.process-*/_count" \
         -d "{
@@ -231,7 +214,7 @@ if [ "$SOLR_RESTARTED" = true ]; then
     # Wait for process events to start flowing
     print_info "Waiting for process event collection to resume..."
     for i in $(seq 1 12); do
-        COUNT=$(curl -sk -u "${AUTH}" \
+        COUNT=$(curl -s -K "$CURL_AUTH_CONF" \
             -H "Content-Type: application/json" \
             "${ES_URL}/logs-endpoint.events.process-*/_count" \
             -d '{
@@ -261,7 +244,7 @@ print_phase "STEP 4: Clearing Elastic Security alerts"
 RULE_NAME="Shell Spawned by Java Process"
 
 print_info "Deleting alerts for rule '${RULE_NAME}'..."
-DELETE_RESPONSE=$(curl -sk -u "${AUTH}" \
+DELETE_RESPONSE=$(curl -s -K "$CURL_AUTH_CONF" \
     -X POST \
     -H "Content-Type: application/json" \
     "${ES_URL}/.alerts-security.alerts-default/_delete_by_query?refresh=true" \
@@ -285,7 +268,7 @@ print_phase "STEP 5: Resetting detection rule suppression"
 STABLE_RULE_ID="siem-demo-shell-spawned-by-java"
 
 # Find the rule's internal ID
-RULE_INTERNAL_ID=$(curl -sk -u "${AUTH}" \
+RULE_INTERNAL_ID=$(curl -s -K "$CURL_AUTH_CONF" \
     -H "kbn-xsrf: true" \
     -H "x-elastic-internal-origin: Kibana" \
     "${KIBANA_URL}/api/detection_engine/rules?rule_id=${STABLE_RULE_ID}" 2>/dev/null \
@@ -294,7 +277,7 @@ RULE_INTERNAL_ID=$(curl -sk -u "${AUTH}" \
 if [ -n "$RULE_INTERNAL_ID" ]; then
     # Disable the rule
     print_info "Disabling detection rule..."
-    curl -sk -u "${AUTH}" \
+    curl -s -K "$CURL_AUTH_CONF" \
         -X PATCH \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
@@ -306,7 +289,7 @@ if [ -n "$RULE_INTERNAL_ID" ]; then
 
     # Re-enable the rule (resets suppression window)
     print_info "Re-enabling detection rule..."
-    curl -sk -u "${AUTH}" \
+    curl -s -K "$CURL_AUTH_CONF" \
         -X PATCH \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
@@ -325,7 +308,7 @@ fi
 
 print_phase "STEP 6: Clearing Elastic Security cases"
 
-CASE_IDS=$(curl -sk -u "${AUTH}" \
+CASE_IDS=$(curl -s -K "$CURL_AUTH_CONF" \
     -H "kbn-xsrf: true" \
     -H "x-elastic-internal-origin: Kibana" \
     "${KIBANA_URL}/api/cases/_find?perPage=100" 2>/dev/null \
@@ -339,7 +322,7 @@ else
     COUNT=$(echo "$CASE_IDS" | wc -l | tr -d ' ')
     print_info "Deleting ${COUNT} case(s)..."
 
-    HTTP_CODE=$(curl -sk -u "${AUTH}" \
+    HTTP_CODE=$(curl -s -K "$CURL_AUTH_CONF" \
         -X DELETE \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
@@ -370,7 +353,7 @@ fi
 
 # Check process events are still flowing
 print_info "Checking for recent process events from solr-kb..."
-COUNT=$(curl -sk -u "${AUTH}" \
+COUNT=$(curl -s -K "$CURL_AUTH_CONF" \
     -H "Content-Type: application/json" \
     "${ES_URL}/logs-endpoint.events.process-*/_count" \
     -d '{
