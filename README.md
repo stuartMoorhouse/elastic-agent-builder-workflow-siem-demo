@@ -96,9 +96,9 @@ This kills attacker/victim processes, clears alerts and cases, resets detection 
 │  AWS VPC — 10.0.1.0/24 (eu-north-1)                                 │
 │                                                                     │
 │  ┌──────────────┐    exploit     ┌──────────────────────────────┐   │
-│  │  Red Team VM  │──────────────→│  solr-kb      (VULNERABLE)   │   │
-│  │  Metasploit   │  reverse shell│  Solr 8.11.0 / JDK 8u181     │   │
-│  │  nmap, nuclei │←──────────────│  Elastic Agent + Defend      │   │
+│  │  Red Team VM │──────────────→ │  solr-kb      (VULNERABLE)   │   │
+│  │  Metasploit  │  reverse shell │  Solr 8.11.0 / JDK 8u181     │   │
+│  │  nmap, nuclei│←────────────── │  Elastic Agent + Defend      │   │
 │  └──────────────┘                └──────────────────────────────┘   │
 │         │                        ┌──────────────────────────────┐   │
 │         │  (same vulnerability)  │  solr-support  (VULNERABLE)  │   │
