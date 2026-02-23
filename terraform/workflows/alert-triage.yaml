@@ -1,26 +1,25 @@
-name: Defend Alert Triage
+name: SIEM Alert Triage
 enabled: true
 description: >
-  Triggered by any Elastic Defend alert. Sends the alert to an Agent Builder
-  agent to identify the likely vulnerability, generates an osquery to scan
-  the fleet for that vulnerability, produces a report, indexes it, and
-  creates an Elastic Security Case. Supports manual execution with JSON
-  alert input.
+  Triggered by connected Elastic SIEM rules. Sends the alert to an 
+  Agent to identify the likely vulnerability, generates an osquery to scan
+  the other hosts for that vulnerability, produces a report, it and
+  creates an Elastic Security Case. 
+
 
 triggers:
   - type: alert
 
 consts:
-  # --- Update these for your environment ---
   alert_analyzer_id: "alert-analyzer"    # Agent for CVE/vulnerability analysis
   osquery_generator_id: "osquery-generator"  # Agent for osquery SQL generation
   report_writer_id: "report-writer"    # Agent for incident report generation
-  connector_id: ""             # Set by deploy-workflow.sh at deploy time
-  agent_policy_id: ""          # Set by deploy-workflow.sh at deploy time
+  connector_id: ""             
+  agent_policy_id: ""          
 
 steps:
   # ==========================================================================
-  # STEP 1: Agent Builder — Analyze the alert and identify the vulnerability
+  # STEP 1: Alert Analyzer Agent — Identify the vulnerability
   # ==========================================================================
   - name: analyze_alert
     type: ai.agent
@@ -32,7 +31,7 @@ steps:
     timeout: 5m
 
   # ==========================================================================
-  # STEP 2: Agent Builder — Generate an osquery to detect the vulnerability
+  # STEP 2:  Osquery Agent— Generate an osquery to detect the vulnerability
   # ==========================================================================
   - name: generate_osquery
     type: ai.agent
@@ -83,7 +82,7 @@ steps:
         | KEEP host.name, osquery.path, action_id, @timestamp
 
   # ==========================================================================
-  # STEP 4: Agent Builder — Produce the final report
+  # STEP 4: Report Writer Agent — Produce the final report
   # ==========================================================================
   - name: generate_report
     type: ai.agent
@@ -118,7 +117,7 @@ steps:
       severity: high
       tags:
         - automated
-        - defend-alert-triage
+        - alert-triage
         - workflow
       connector:
         id: none

@@ -41,7 +41,7 @@ ALERT_ANALYZER_DEF="${WORKFLOWS_DIR}/agents/alert-analyzer.json"
 OSQUERY_GENERATOR_DEF="${WORKFLOWS_DIR}/agents/osquery-generator.json"
 REPORT_WRITER_DEF="${WORKFLOWS_DIR}/agents/report-writer.json"
 REPORT_TEMPLATE="${WORKFLOWS_DIR}/templates/incident-report-template.md"
-WORKFLOW_DEF="${WORKFLOWS_DIR}/defend-alert-triage.yaml"
+WORKFLOW_DEF="${WORKFLOWS_DIR}/alert-triage.yaml"
 
 ################################################################################
 # READ TERRAFORM OUTPUTS

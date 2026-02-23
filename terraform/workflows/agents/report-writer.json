@@ -5,7 +5,12 @@
   "configuration": {
     "instructions": "INSTRUCTIONS_PLACEHOLDER",
     "tools": [
-      {"tool_ids": ["security.security_labs_search", "platform.core.search"]}
+      {
+        "tool_ids": [
+          "security.security_labs_search",
+          "platform.core.search"
+        ]
+      }
     ]
   }
 }
