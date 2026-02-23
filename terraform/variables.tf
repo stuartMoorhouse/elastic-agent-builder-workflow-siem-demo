@@ -54,6 +54,12 @@ variable "kibana_zone_count" {
 
 # AWS Variables
 
+variable "aws_profile" {
+  description = "AWS CLI profile name. Leave empty to use the default credential chain."
+  type        = string
+  default     = ""
+}
+
 variable "aws_region" {
   description = "AWS region for EC2 instances"
   type        = string

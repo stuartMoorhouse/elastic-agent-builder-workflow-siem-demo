@@ -25,6 +25,17 @@ export TF_VAR_deployment_name="workflow-demo"     # default
 ```bash
 cd terraform
 terraform init
+```
+
+If you use a named AWS CLI profile (instead of environment variables or the default profile), create a `terraform.tfvars` file:
+
+```hcl
+aws_profile = "your-profile-name"
+```
+
+Then apply:
+
+```bash
 terraform apply
 ```
 

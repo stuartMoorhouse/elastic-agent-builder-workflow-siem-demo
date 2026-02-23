@@ -29,7 +29,7 @@ provider "ec" {} # Uses EC_API_KEY from environment
 
 provider "aws" {
   region  = var.aws_region
-  profile = "company"
+  profile = var.aws_profile != "" ? var.aws_profile : null
 
   default_tags {
     tags = var.aws_tags
