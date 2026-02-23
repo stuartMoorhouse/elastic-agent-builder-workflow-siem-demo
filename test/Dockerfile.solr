@@ -1,0 +1,16 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install base dependencies the userdata script assumes exist
+RUN apt-get update -qq && \
+    apt-get install -y -qq sudo systemd-sysv && \
+    apt-get clean
+
+# Create log directory
+RUN mkdir -p /var/log
+
+COPY userdata-solr.sh /usr/local/bin/userdata.sh
+RUN chmod +x /usr/local/bin/userdata.sh
+
+CMD ["/usr/local/bin/userdata.sh"]

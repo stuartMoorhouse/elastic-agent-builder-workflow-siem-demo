@@ -28,6 +28,18 @@ variable "elasticsearch_zone_count" {
   default     = 1
 }
 
+variable "ml_size" {
+  description = "Machine Learning node size"
+  type        = string
+  default     = "4g"
+}
+
+variable "ml_zone_count" {
+  description = "Number of Machine Learning availability zones"
+  type        = number
+  default     = 1
+}
+
 variable "kibana_size" {
   description = "Kibana node size"
   type        = string
