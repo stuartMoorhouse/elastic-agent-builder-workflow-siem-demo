@@ -1,31 +1,32 @@
-# Deployment Configuration
-deployment_name        = "workflow-demo"
-region                 = "gcp-us-central1"
-deployment_template_id = "gcp-storage-optimized"
+# All variables have usable defaults — you can run `terraform apply` without
+# creating a .tfvars file at all. To customise, copy this file to terraform.tfvars
+# and uncomment any lines you want to override.
 
-# Elasticsearch Configuration
-elasticsearch_size       = "8g"
-elasticsearch_zone_count = 1
+# --- Elastic Cloud ---
+# deployment_name        = "workflow-demo"
+# region                 = "gcp-us-central1"
+# deployment_template_id = "gcp-storage-optimized"
+# elasticsearch_size       = "8g"
+# elasticsearch_zone_count = 1
+# kibana_size       = "1g"
+# kibana_zone_count = 1
 
-# Kibana Configuration
-kibana_size       = "1g"
-kibana_zone_count = 1
+# --- AWS ---
+# aws_profile = "your-profile-name"  # Omit to use default credential chain
+# aws_region  = "eu-north-1"
+# aws_tags = {
+#   division   = "your-division"
+#   org        = "your-org"
+#   keep-until = "2026-12-31"
+#   team       = "your-team"
+#   project    = "your-project"
+# }
 
-# AWS Configuration
-aws_region = "eu-north-1"
-aws_tags = {
-  division   = "your-division"
-  org        = "your-org"
-  keep-until = "2026-12-31"
-  team       = "your-team"
-  project    = "your-project"
-}
+# --- AWS Instance Types ---
+# aws_instance_type_host    = "t3.large"
+# aws_instance_type_redteam = "t3.large"
 
-# AWS Instance Types
-aws_instance_type_host    = "t3.large"
-aws_instance_type_redteam = "t3.large"
-
-# AWS Networking
-vpc_cidr           = "10.0.0.0/16"
-public_subnet_cidr = "10.0.1.0/24"
-# allowed_ssh_cidr = "YOUR_IP/32"  # Optional — auto-detected from your public IP if not set
+# --- AWS Networking ---
+# vpc_cidr           = "10.0.0.0/16"
+# public_subnet_cidr = "10.0.1.0/24"
+# allowed_ssh_cidr   = "YOUR_IP/32"  # Auto-detected from your public IP if not set
