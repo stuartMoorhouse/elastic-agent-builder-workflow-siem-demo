@@ -39,17 +39,11 @@ cd "$TERRAFORM_DIR"
 
 print_phase "STEP 1: Reading Terraform outputs"
 
-KIBANA_URL=$(terraform output -raw kibana_endpoint)
-ES_URL=$(terraform output -raw elasticsearch_endpoint)
-ES_USER=$(terraform output -raw elasticsearch_username)
-ES_PASS=$(terraform output -raw elasticsearch_password)
-setup_curl_auth "$ES_USER" "$ES_PASS"
+read_terraform_outputs
+read_vm_ips
 
-REDTEAM_PUBLIC_IP=$(terraform output -raw redteam_public_ip)
-REDTEAM_PRIVATE_IP=$(terraform output -raw redteam_private_ip)
-
-SOLR_KB_PUBLIC_IP=$(terraform output -json host_public_ips | jq -r '.["solr-kb"]')
-SOLR_KB_PRIVATE_IP=$(terraform output -json host_private_ips | jq -r '.["solr-kb"]')
+SOLR_KB_HOSTNAME="${PROJECT_PREFIX}-solr-kb"
+STABLE_RULE_ID="${PROJECT_PREFIX}-shell-spawned-by-java"
 
 print_info "Kibana:          $KIBANA_URL"
 print_info "solr-kb public:  $SOLR_KB_PUBLIC_IP"
@@ -143,7 +137,7 @@ if [ "$SOLR_RESTARTED" = false ]; then
                 \"bool\": {
                     \"filter\": [
                         {\"range\": {\"@timestamp\": {\"gte\": \"now-30m\"}}},
-                        {\"term\": {\"host.name\": \"siem-demo-solr-kb\"}},
+                        {\"term\": {\"host.name\": \"${SOLR_KB_HOSTNAME}\"}},
                         {\"term\": {\"process.parent.name\": \"java\"}},
                         {\"term\": {\"event.type\": \"start\"}}
                     ]
@@ -223,7 +217,7 @@ if [ "$SOLR_RESTARTED" = true ]; then
                     "bool": {
                         "filter": [
                             {"range": {"@timestamp": {"gte": "now-1m"}}},
-                            {"term": {"host.name": "siem-demo-solr-kb"}}
+                            {"term": {"host.name": "${SOLR_KB_HOSTNAME}"}}
                         ]
                     }
                 }
@@ -244,7 +238,6 @@ fi
 print_phase "STEP 4: Disabling detection rule"
 
 RULE_NAME="Shell Spawned by Java Process"
-STABLE_RULE_ID="siem-demo-shell-spawned-by-java"
 
 # Find the rule's internal ID
 RULE_INTERNAL_ID=$(curl -s -K "$CURL_AUTH_CONF" \
@@ -410,7 +403,7 @@ COUNT=$(curl -s -K "$CURL_AUTH_CONF" \
             "bool": {
                 "filter": [
                     {"range": {"@timestamp": {"gte": "now-2m"}}},
-                    {"term": {"host.name": "siem-demo-solr-kb"}}
+                    {"term": {"host.name": "${SOLR_KB_HOSTNAME}"}}
                 ]
             }
         }

@@ -1,3 +1,8 @@
+output "project_prefix" {
+  description = "Prefix used for all AWS resource names"
+  value       = local.prefix
+}
+
 output "deployment_id" {
   description = "Elastic Cloud deployment ID"
   value       = ec_deployment.main.id

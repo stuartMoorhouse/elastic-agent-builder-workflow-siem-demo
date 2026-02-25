@@ -24,6 +24,9 @@ ES_USER=$(terraform output -raw elasticsearch_username)
 ELASTIC_VERSION=$(terraform output -raw deployment_version)
 SSH_KEY="${PROJECT_DIR}/state/ssh-key.pem"
 
+PROJECT_PREFIX=$(terraform output -raw project_prefix)
+REPORTS_INDEX="${PROJECT_PREFIX}-reports"
+
 REDTEAM_PUB=$(terraform output -raw redteam_public_ip)
 REDTEAM_PRIV=$(terraform output -raw redteam_private_ip)
 
@@ -129,7 +132,7 @@ The Defend Alert Triage workflow triggers automatically on alerts:
 2. Generates an osquery to detect Log4Shell fleet-wide
 3. Tests the query on the source host
 4. Runs it across all monitored hosts
-5. Indexes an incident report to \`siem-demo-reports\`
+5. Indexes an incident report to \`${REPORTS_INDEX}\`
 
 ### View the report
 
@@ -143,10 +146,10 @@ Query the reports index (replace \`<PASSWORD>\`):
 
 \`\`\`bash
 curl -s -u "${ES_USER}:<PASSWORD>" \\
-  "${ES_URL}/siem-demo-reports/_search?pretty&size=1&sort=@timestamp:desc"
+  "${ES_URL}/${REPORTS_INDEX}/_search?pretty&size=1&sort=@timestamp:desc"
 \`\`\`
 
-Or open Kibana Discover: ${KIBANA_URL}/app/discover (index pattern: \`siem-demo-reports\`)
+Or open Kibana Discover: ${KIBANA_URL}/app/discover (index pattern: \`${REPORTS_INDEX}\`)
 
 ### Run osquery manually (optional)
 

@@ -11,13 +11,13 @@ resource "ec_deployment" "main" {
 
   elasticsearch = {
     hot = {
-      size       = var.elasticsearch_size
-      zone_count = var.elasticsearch_zone_count
+      size        = var.elasticsearch_size
+      zone_count  = var.elasticsearch_zone_count
       autoscaling = {}
     }
     ml = {
-      size       = var.ml_size
-      zone_count = var.ml_zone_count
+      size        = var.ml_size
+      zone_count  = var.ml_zone_count
       autoscaling = {}
     }
   }

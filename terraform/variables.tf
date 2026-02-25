@@ -1,3 +1,19 @@
+variable "project_prefix" {
+  description = "Prefix for all AWS resource names. Leave empty to auto-generate a unique prefix (siem-demo-<random>)."
+  type        = string
+  default     = ""
+}
+
+resource "random_string" "suffix" {
+  length  = 4
+  special = false
+  upper   = false
+}
+
+locals {
+  prefix = var.project_prefix != "" ? var.project_prefix : "siem-demo-${random_string.suffix.result}"
+}
+
 variable "deployment_name" {
   description = "Name of the Elastic Cloud deployment"
   type        = string

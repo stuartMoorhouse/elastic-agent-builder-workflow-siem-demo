@@ -266,7 +266,7 @@ echo ""
 print_step "[6/7] Creating detection rule..."
 
 CUSTOM_RULE_NAME="Shell Spawned by Java Process"
-STABLE_RULE_ID="siem-demo-shell-spawned-by-java"
+STABLE_RULE_ID="${PROJECT_PREFIX}-shell-spawned-by-java"
 
 # Delete ALL existing rules with this name (cleans up duplicates from prior deploys)
 EXISTING_IDS=$(curl -s -K "$CURL_AUTH_CONF" \

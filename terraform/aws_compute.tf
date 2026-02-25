@@ -21,7 +21,7 @@ resource "tls_private_key" "ssh" {
 }
 
 resource "aws_key_pair" "main" {
-  key_name   = "siem-demo-key"
+  key_name   = "${local.prefix}-key"
   public_key = tls_private_key.ssh.public_key_openssh
 }
 
@@ -38,7 +38,7 @@ locals {
   host_configs = [
     {
       name         = "solr-kb"
-      hostname     = "siem-demo-solr-kb"
+      hostname     = "${local.prefix}-solr-kb"
       role_label   = "Knowledge Base"
       solr_version = "8.11.0"
       jdk_url      = "https://cdn.azul.com/zulu/bin/zulu8.31.0.1-jdk8.0.181-linux_x64.tar.gz"
@@ -47,7 +47,7 @@ locals {
     },
     {
       name         = "solr-support"
-      hostname     = "siem-demo-solr-support"
+      hostname     = "${local.prefix}-solr-support"
       role_label   = "Support Portal"
       solr_version = "8.11.0"
       jdk_url      = "https://cdn.azul.com/zulu/bin/zulu8.31.0.1-jdk8.0.181-linux_x64.tar.gz"
@@ -56,7 +56,7 @@ locals {
     },
     {
       name         = "solr-catalog"
-      hostname     = "siem-demo-solr-catalog"
+      hostname     = "${local.prefix}-solr-catalog"
       role_label   = "Product Catalog"
       solr_version = "8.11.0"
       jdk_url      = "https://cdn.azul.com/zulu/bin/zulu8.31.0.1-jdk8.0.181-linux_x64.tar.gz"
@@ -86,7 +86,7 @@ resource "aws_instance" "host" {
               set -e
 
               # Log all output to file for debugging
-              exec > >(tee -a /var/log/siem-demo-setup.log)
+              exec > >(tee -a /var/log/${local.prefix}-setup.log)
               exec 2>&1
 
               HOST_NAME="${local.host_configs[count.index].hostname}"
@@ -247,7 +247,7 @@ resource "aws_instance" "redteam" {
               set -e
 
               # Log all output to file for debugging
-              exec > >(tee -a /var/log/siem-demo-setup.log)
+              exec > >(tee -a /var/log/${local.prefix}-setup.log)
               exec 2>&1
 
               echo "=========================================="
@@ -257,7 +257,7 @@ resource "aws_instance" "redteam" {
 
               # Set hostname
               echo "[1/7] Setting hostname..."
-              hostnamectl set-hostname siem-demo-redteam-01
+              hostnamectl set-hostname ${local.prefix}-redteam-01
 
               # Update system
               echo "[2/7] Updating system packages..."
@@ -315,7 +315,7 @@ resource "aws_instance" "redteam" {
               EOF
 
   tags = {
-    Name = "siem-demo-redteam-01"
+    Name = "${local.prefix}-redteam-01"
     Role = "red-team"
   }
 }

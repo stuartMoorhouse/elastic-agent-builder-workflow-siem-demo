@@ -13,7 +13,7 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
 
   tags = {
-    Name = "siem-demo-vpc"
+    Name = "${local.prefix}-vpc"
   }
 }
 
@@ -21,7 +21,7 @@ resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
   tags = {
-    Name = "siem-demo-igw"
+    Name = "${local.prefix}-igw"
   }
 }
 
@@ -32,7 +32,7 @@ resource "aws_subnet" "public" {
   availability_zone       = "${var.aws_region}a"
 
   tags = {
-    Name = "siem-demo-public"
+    Name = "${local.prefix}-public"
   }
 }
 
@@ -45,7 +45,7 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name = "siem-demo-public-rt"
+    Name = "${local.prefix}-public-rt"
   }
 }
 

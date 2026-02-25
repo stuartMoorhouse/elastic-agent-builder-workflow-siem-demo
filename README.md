@@ -20,6 +20,8 @@ terraform init
 
 All variables have usable defaults — you can run `terraform apply` without creating a `.tfvars` file. To customise, copy `terraform.tfvars.example` to `terraform.tfvars` and uncomment any lines you want to override (e.g. AWS profile, SSH IP, region).
 
+Each deployment gets a unique `project_prefix` (e.g. `siem-demo-a3f2`). To use a custom prefix, set `project_prefix = "my-demo"` in your `.tfvars` file.
+
 ```bash
 terraform apply
 ```
@@ -69,7 +71,7 @@ You'll be dropped into an interactive Metasploit session on the victim.
   1. AI agent analyzes the alert for likely vulnerability
   2. Generates an osquery to detect Log4Shell fleet-wide
   3. Runs the query across all monitored hosts
-  4. Creates an incident report indexed to `siem-demo-reports`
+  4. Creates an incident report indexed to `<prefix>-reports`
 
 ---
 
@@ -121,7 +123,7 @@ This kills attacker/victim processes, clears alerts and cases, resets detection 
 │  Workflow: Alert Triage                                             │
 │    1. AI agent analyzes alert → identifies Log4Shell                │
 │    2. Generates osquery → scans fleet for vulnerable Log4j JARs     │
-│    3. Indexes incident report → siem-demo-reports                   │
+│    3. Indexes incident report → <prefix>-reports                    │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 

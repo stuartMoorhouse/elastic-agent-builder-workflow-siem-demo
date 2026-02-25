@@ -1,20 +1,20 @@
 resource "aws_security_group" "host" {
-  name        = "siem-demo-host"
+  name        = "${local.prefix}-host"
   description = "Security group for SIEM demo host VMs"
   vpc_id      = aws_vpc.main.id
 
   tags = {
-    Name = "siem-demo-host-sg"
+    Name = "${local.prefix}-host-sg"
   }
 }
 
 resource "aws_security_group" "redteam" {
-  name        = "siem-demo-redteam"
+  name        = "${local.prefix}-redteam"
   description = "Security group for SIEM demo red team VM"
   vpc_id      = aws_vpc.main.id
 
   tags = {
-    Name = "siem-demo-redteam-sg"
+    Name = "${local.prefix}-redteam-sg"
   }
 }
 

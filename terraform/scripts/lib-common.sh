@@ -32,7 +32,7 @@ TERRAFORM_DIR="$(dirname "$LIB_DIR")"
 PROJECT_DIR="$(dirname "$TERRAFORM_DIR")"
 SSH_KEY="${PROJECT_DIR}/state/ssh-key.pem"
 SSH_USER="ubuntu"
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o LogLevel=ERROR"
+SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o LogLevel=ERROR"
 
 # --- Curl auth (hides credentials from process table) ------------------------
 #
@@ -56,7 +56,7 @@ cleanup_curl_auth() {
 # --- Terraform output helpers ------------------------------------------------
 
 # Read common terraform outputs into global variables and set up curl auth.
-# Sets: KIBANA_URL, ES_URL, ES_USER, ES_PASS, ES_VERSION, CURL_AUTH_CONF
+# Sets: KIBANA_URL, ES_URL, ES_USER, ES_PASS, ES_VERSION, PROJECT_PREFIX, CURL_AUTH_CONF
 read_terraform_outputs() {
     cd "$TERRAFORM_DIR"
     KIBANA_URL=$(terraform output -raw kibana_endpoint)
@@ -64,6 +64,7 @@ read_terraform_outputs() {
     ES_USER=$(terraform output -raw elasticsearch_username)
     ES_PASS=$(terraform output -raw elasticsearch_password)
     ES_VERSION=$(terraform output -raw deployment_version)
+    PROJECT_PREFIX=$(terraform output -raw project_prefix)
     setup_curl_auth "$ES_USER" "$ES_PASS"
 }
 
@@ -198,22 +199,23 @@ EOSSH
 
 # Wait for process events to appear in Elasticsearch from solr-kb.
 wait_for_process_events() {
-    print_info "Waiting up to 3 minutes for process events from siem-demo-solr-kb..."
+    local hostname="${PROJECT_PREFIX:-siem-demo}-solr-kb"
+    print_info "Waiting up to 3 minutes for process events from ${hostname}..."
     local events_found=false
     for i in $(seq 1 36); do
         COUNT=$(curl -s -K "$CURL_AUTH_CONF" \
             -H "Content-Type: application/json" \
             "${ES_URL}/logs-endpoint.events.process-*/_count" \
-            -d '{
-                "query": {
-                    "bool": {
-                        "filter": [
-                            {"range": {"@timestamp": {"gte": "now-5m"}}},
-                            {"term": {"host.name": "siem-demo-solr-kb"}}
+            -d "{
+                \"query\": {
+                    \"bool\": {
+                        \"filter\": [
+                            {\"range\": {\"@timestamp\": {\"gte\": \"now-5m\"}}},
+                            {\"term\": {\"host.name\": \"${hostname}\"}}
                         ]
                     }
                 }
-            }' 2>/dev/null | jq -r '.count // 0' 2>/dev/null)
+            }" 2>/dev/null | jq -r '.count // 0' 2>/dev/null)
 
         if [ "$COUNT" -gt 0 ] 2>/dev/null; then
             print_info "Found $COUNT process events — event collection is active!"

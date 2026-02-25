@@ -2,6 +2,9 @@
 # creating a .tfvars file at all. To customise, copy this file to terraform.tfvars
 # and uncomment any lines you want to override.
 
+# --- Project Prefix ---
+# project_prefix = "my-demo"  # Auto-generates a unique prefix if not set
+
 # --- Elastic Cloud ---
 # deployment_name        = "workflow-demo"
 # region                 = "gcp-us-central1"
