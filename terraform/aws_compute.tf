@@ -81,6 +81,11 @@ resource "aws_instance" "host" {
     volume_type = "gp3"
   }
 
+  metadata_options {
+    http_tokens   = "required"
+    http_endpoint = "enabled"
+  }
+
   user_data = <<-EOF
               #!/bin/bash
               set -e
@@ -242,9 +247,15 @@ resource "aws_instance" "redteam" {
     volume_type = "gp3"
   }
 
+  metadata_options {
+    http_tokens   = "required"
+    http_endpoint = "enabled"
+  }
+
   user_data = <<-EOF
               #!/bin/bash
-              set -e
+              # Do NOT use set -e globally — individual steps handle their own errors
+              # so that a transient failure in one tool doesn't abort the entire setup.
 
               # Log all output to file for debugging
               exec > >(tee -a /var/log/${local.prefix}-setup.log)
@@ -254,6 +265,8 @@ resource "aws_instance" "redteam" {
               echo "SIEM Demo - Red Team VM Setup"
               echo "Starting: $(date)"
               echo "=========================================="
+
+              SETUP_ERRORS=0
 
               # Set hostname
               echo "[1/7] Setting hostname..."
@@ -265,34 +278,67 @@ resource "aws_instance" "redteam" {
               apt-get update -qq
               apt-get upgrade -y -qq
 
-              # Install dependencies
+              # Install dependencies (required — abort if this fails)
               echo "[3/7] Installing dependencies..."
-              apt-get install -y -qq curl wget git build-essential libssl-dev \
+              if ! apt-get install -y -qq curl wget git build-essential libssl-dev \
                 libreadline-dev zlib1g-dev nmap netcat-traditional postgresql \
-                postgresql-contrib python3 python3-pip unzip jq
+                postgresql-contrib python3 python3-pip unzip jq; then
+                echo "[FATAL] Failed to install base dependencies"
+                exit 1
+              fi
 
-              # Install Metasploit Framework
+              # Install Metasploit Framework (with retries)
               echo "[4/7] Installing Metasploit Framework..."
               cd /tmp
-              curl -s https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb > msfinstall
-              chmod 755 msfinstall
-              ./msfinstall
+              MSF_INSTALLED=false
+              for attempt in 1 2 3; do
+                echo "  Metasploit install attempt $${attempt}/3..."
+                curl --fail --retry 3 --retry-delay 5 -sS \
+                  https://raw.githubusercontent.com/rapid7/metasploit-omnibus/master/config/templates/metasploit-framework-wrappers/msfupdate.erb \
+                  -o msfinstall
+                if [ ! -s msfinstall ]; then
+                  echo "  Download produced empty file, retrying in 15s..."
+                  sleep 15
+                  continue
+                fi
+                chmod 755 msfinstall
+                if ./msfinstall; then
+                  MSF_INSTALLED=true
+                  break
+                fi
+                echo "  Installer failed, retrying in 15s..."
+                sleep 15
+              done
+              if [ "$${MSF_INSTALLED}" = false ]; then
+                echo "[ERROR] Metasploit installation failed after 3 attempts"
+                SETUP_ERRORS=$((SETUP_ERRORS + 1))
+              fi
 
               # Initialize Metasploit database
               echo "[5/7] Initializing Metasploit database..."
-              su - ubuntu -c "msfdb init" || echo "Note: Database initialization skipped (run 'msfdb init' manually after login)"
+              if [ "$${MSF_INSTALLED}" = true ]; then
+                su - ubuntu -c "msfdb init" || echo "Note: msfdb init failed (run 'msfdb init' manually after login)"
+              else
+                echo "  Skipped — Metasploit not installed"
+              fi
 
               # Install nuclei (for Log4Shell vulnerability scanning)
               echo "[6/7] Installing nuclei..."
-              NUCLEI_VERSION=$(curl -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest | jq -r '.tag_name' | tr -d 'v')
+              NUCLEI_VERSION=$(curl --fail --retry 3 -s https://api.github.com/repos/projectdiscovery/nuclei/releases/latest | jq -r '.tag_name' | tr -d 'v')
               if [ -n "$${NUCLEI_VERSION}" ] && [ "$${NUCLEI_VERSION}" != "null" ]; then
-                wget -q "https://github.com/projectdiscovery/nuclei/releases/download/v$${NUCLEI_VERSION}/nuclei_$${NUCLEI_VERSION}_linux_amd64.zip" -O /tmp/nuclei.zip
-                unzip -o /tmp/nuclei.zip -d /usr/local/bin/
-                chmod +x /usr/local/bin/nuclei
-                # Download nuclei templates as ubuntu user
-                su - ubuntu -c "nuclei -update-templates 2>/dev/null" || echo "Note: nuclei templates will download on first run"
+                if wget -q --timeout=60 --tries=3 \
+                  "https://github.com/projectdiscovery/nuclei/releases/download/v$${NUCLEI_VERSION}/nuclei_$${NUCLEI_VERSION}_linux_amd64.zip" \
+                  -O /tmp/nuclei.zip && [ -s /tmp/nuclei.zip ]; then
+                  unzip -o /tmp/nuclei.zip -d /usr/local/bin/
+                  chmod +x /usr/local/bin/nuclei
+                  su - ubuntu -c "nuclei -update-templates 2>/dev/null" || echo "Note: nuclei templates will download on first run"
+                else
+                  echo "WARNING: nuclei download failed"
+                  SETUP_ERRORS=$((SETUP_ERRORS + 1))
+                fi
               else
                 echo "WARNING: Could not determine nuclei version, skipping install"
+                SETUP_ERRORS=$((SETUP_ERRORS + 1))
               fi
 
               # Create scripts directory for attack automation
@@ -303,13 +349,17 @@ resource "aws_instance" "redteam" {
               # Verify installation
               echo ""
               echo "Verification:"
-              msfconsole --version || echo "Metasploit not available yet"
-              nmap --version | head -1
-              nuclei --version 2>/dev/null || echo "nuclei not available yet"
+              msfconsole --version 2>/dev/null || echo "MISSING: msfconsole"
+              nmap --version | head -1 || echo "MISSING: nmap"
+              nuclei --version 2>/dev/null || echo "MISSING: nuclei"
 
               echo ""
               echo "=========================================="
-              echo "Red Team VM Setup Complete!"
+              if [ $${SETUP_ERRORS} -gt 0 ]; then
+                echo "Red Team VM Setup COMPLETED WITH $${SETUP_ERRORS} ERROR(S)"
+              else
+                echo "Red Team VM Setup Complete!"
+              fi
               echo "Completed: $(date)"
               echo "=========================================="
               EOF

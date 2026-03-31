@@ -56,8 +56,9 @@ terraform output -raw kibana_endpoint
 From the `terraform/` directory — SSHs into the red team VM and exploits solr-kb:
 
 ```bash
+TARGET_IP=$(terraform output -json host_private_ips | jq -r '.["solr-kb"]')
 $(terraform output -raw ssh_command_redteam) -t \
-  "./scripts/host-scan.sh -t $(terraform output -json host_private_ips | jq -r '.["solr-kb"]') -a \$(hostname -I | awk '{print \$1}')"
+  './scripts/host-scan.sh -t '"$TARGET_IP"' -a $(hostname -I | awk '"'"'{print $1}'"'"')'
 ```
 
 The script runs through: nmap discovery, Solr version fingerprinting, Log4Shell confirmation, Metasploit exploitation, and reverse shell.
@@ -135,6 +136,16 @@ This kills attacker/victim processes, clears alerts and cases, resets detection 
 - Check Fleet → Agents — if an agent is "Unhealthy" or "Offline", the host isn't sending telemetry.
 - If agents are healthy but no alerts: the detection rule may be disabled or suppressed from a previous run. Run `./terraform/scripts/reset-demo.sh` to clear suppression state.
 - If Solr was restarted at any point (e.g., during debugging), the Elastic Defend eBPF sensor loses track of the Java process tree. The reset script detects this and restarts `ElasticEndpoint.service` automatically.
+
+**`./scripts/host-scan.sh: No such file or directory` on the red team VM**
+- The terraform file provisioner (`null_resource.redteam_scripts`) didn't upload the script. This happens when the provisioner was already marked as created from a previous apply and the trigger hash didn't change.
+- Quick fix: SCP it manually from the `terraform/` directory:
+  ```bash
+  scp -i ../state/ssh-key.pem scripts/host-scan.sh \
+    ubuntu@$(terraform output -raw redteam_public_ip):/home/ubuntu/scripts/host-scan.sh
+  $(terraform output -raw ssh_command_redteam) 'chmod +x /home/ubuntu/scripts/host-scan.sh'
+  ```
+- Or force the provisioner to re-run: `terraform taint null_resource.redteam_scripts && terraform apply`
 
 **Reverse shell doesn't connect**
 - Verify the red team VM's security group allows inbound on ports 1389, 4444, and 8080 from the VPC subnet. Terraform configures this, but if you modified the security group manually, check it.

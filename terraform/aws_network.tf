@@ -53,3 +53,56 @@ resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public.id
   route_table_id = aws_route_table.public.id
 }
+
+# GuardDuty Runtime Monitoring auto-creates VPC endpoints and security groups
+# that aren't in Terraform state, blocking subnet/VPC deletion on destroy.
+resource "null_resource" "vpc_guardduty_cleanup" {
+  triggers = {
+    vpc_id  = aws_vpc.main.id
+    region  = var.aws_region
+    profile = var.aws_profile
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-EOT
+      PROFILE_FLAG=""
+      if [ -n "${self.triggers.profile}" ]; then
+        PROFILE_FLAG="--profile ${self.triggers.profile}"
+      fi
+
+      # Delete VPC endpoints (e.g. GuardDuty runtime monitoring)
+      ENDPOINTS=$(aws ec2 describe-vpc-endpoints \
+        --filters "Name=vpc-id,Values=${self.triggers.vpc_id}" \
+        --query 'VpcEndpoints[].VpcEndpointId' \
+        --output text \
+        --region ${self.triggers.region} \
+        $PROFILE_FLAG 2>/dev/null)
+      if [ -n "$ENDPOINTS" ] && [ "$ENDPOINTS" != "None" ]; then
+        echo "Cleaning up VPC endpoints: $ENDPOINTS"
+        aws ec2 delete-vpc-endpoints \
+          --vpc-endpoint-ids $ENDPOINTS \
+          --region ${self.triggers.region} \
+          $PROFILE_FLAG
+        sleep 15
+      fi
+
+      # Delete non-default security groups (e.g. GuardDuty-managed)
+      SG_IDS=$(aws ec2 describe-security-groups \
+        --filters "Name=vpc-id,Values=${self.triggers.vpc_id}" \
+        --query 'SecurityGroups[?GroupName!=`default`].GroupId' \
+        --output text \
+        --region ${self.triggers.region} \
+        $PROFILE_FLAG 2>/dev/null)
+      if [ -n "$SG_IDS" ] && [ "$SG_IDS" != "None" ]; then
+        for SG in $SG_IDS; do
+          echo "Deleting security group: $SG"
+          aws ec2 delete-security-group \
+            --group-id "$SG" \
+            --region ${self.triggers.region} \
+            $PROFILE_FLAG 2>/dev/null || true
+        done
+      fi
+    EOT
+  }
+}
