@@ -19,7 +19,6 @@
 - **Alert Source:** Elastic Defend
 - **Alert Rule:** [from alert data: kibana.alert.rule.name]
 - **Hostname:** [from alert data: host.name]
-- **Host IP:** [from alert data: host.ip]
 - **Host OS:** [from alert data: host.os.name and version]
 - **Timestamp:** [from alert data: @timestamp]
 - **Severity:** [from alert data: kibana.alert.severity]

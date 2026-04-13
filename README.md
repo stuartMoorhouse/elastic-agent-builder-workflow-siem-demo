@@ -6,9 +6,17 @@ Purple team demo: Log4Shell ([CVE-2021-44228](https://nvd.nist.gov/vuln/detail/C
 
 - Terraform CLI installed
 - `jq` installed (used by helper scripts)
-- AWS credentials as environment variables:
-  - `AWS_ACCESS_KEY_ID`
-  - `AWS_SECRET_ACCESS_KEY`
+- AWS credentials configured via a named profile (default: `company`):
+  ```bash
+  aws configure --profile company
+  # Enter your Access Key ID and Secret Access Key for the target account
+  # Set default region (e.g. eu-north-1)
+  ```
+  The Terraform provider uses `aws_profile` from your `.tfvars` (defaults to `company`).
+  **Do not** rely on `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables — they override the profile and may point to the wrong account. Unset them if present:
+  ```bash
+  unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  ```
 - An Elastic Cloud API key (set via `EC_API_KEY` or in your Terraform variables)
 
 ## Deploy
