@@ -1,5 +1,5 @@
 data "ec_stack" "latest" {
-  version_regex = "latest"
+  version_regex = "9\\.3\\.4"
   region        = var.region
 }
 
