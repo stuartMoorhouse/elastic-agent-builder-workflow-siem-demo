@@ -75,7 +75,7 @@ if [[ -f "$WORKFLOW_ID_FILE" ]]; then
             -X DELETE \
             -H "kbn-xsrf: true" \
             -H "x-elastic-internal-origin: Kibana" \
-            "${KIBANA_URL}/api/workflows/${OLD_WORKFLOW_ID}" 2>/dev/null)
+            "${KIBANA_URL}/api/workflows/workflow/${OLD_WORKFLOW_ID}" 2>/dev/null)
         if [[ "$HTTP_CODE" == "200" || "$HTTP_CODE" == "204" ]]; then
             print_info "  Deleted."
         else
@@ -238,7 +238,7 @@ WORKFLOW_RESPONSE=$(echo "$WORKFLOW_YAML" | jq -Rs '{yaml: .}' | \
         -H "kbn-xsrf: true" \
         -H "x-elastic-internal-origin: Kibana" \
         -H "Content-Type: application/json" \
-        "${KIBANA_URL}/api/workflows" \
+        "${KIBANA_URL}/api/workflows/workflow" \
         -d @- 2>/dev/null)
 
 WORKFLOW_ID=$(echo "$WORKFLOW_RESPONSE" | jq -r '.id // .data.id // empty' 2>/dev/null || echo "")
